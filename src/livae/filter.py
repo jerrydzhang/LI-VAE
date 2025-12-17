@@ -5,6 +5,8 @@ from typing import Tuple
 import numpy as np
 from numpy.typing import NDArray
 from scipy import fft
+from skimage import exposure
+from skimage.filters import unsharp_mask
 
 __all__ = [
     "fft_spectra",
@@ -12,6 +14,7 @@ __all__ = [
     "lowpass_filter",
     "highpass_filter",
     "bandpass_filter",
+    "enhance_lattice_contrast",
 ]
 
 FloatArray = NDArray[np.float64]
@@ -230,3 +233,75 @@ def bandpass_filter(
     mask = _radial_mask(array.shape, low_cutoff=low_cutoff, high_cutoff=high_cutoff)
     filtered = fft_image * mask
     return np.real(fft.ifft2(fft.ifftshift(filtered)))
+
+
+def enhance_lattice_contrast(
+    image: NumericArray,
+    *,
+    clip_limit: float = 0.03,
+    tile_grid_size: int | tuple[int, int] = 16,
+    unsharp_radius: float = 0.5,
+    unsharp_amount: float = 2.5,
+    denoise: bool = True,
+) -> FloatArray:
+    """Enhance lattice visibility via CLAHE and aggressive unsharp masking.
+
+    This function assumes the input is a 2D image. It performs:
+    1) Normalization to [0, 1]
+    2) Contrast Limited Adaptive Histogram Equalization (CLAHE) with smaller tiles
+    3) Aggressive unsharp masking to accentuate atomic peaks/edges
+    4) Optional denoising via morphological opening to suppress spurious peaks
+
+    Parameters
+    ----------
+    image : array-like, shape (M, N)
+            Input 2D image array.
+    clip_limit : float, optional
+            Normalized clip limit for CLAHE. Lower values limit noise amplification.
+            Default is 0.03 (higher than before for more local boost).
+    tile_grid_size : int | (int, int), optional
+            Size of contextual regions for CLAHE. Smaller = more local contrast.
+            Default is 16 (smaller than before for finer lattice structure).
+    unsharp_radius : float, optional
+            Radius for unsharp masking (in pixels). Smaller = finer detail.
+            Default is 0.5.
+    unsharp_amount : float, optional
+            Strength of unsharp masking. Higher = more aggressive sharpening.
+            Default is 2.5 (stronger than before).
+    denoise : bool, optional
+            If True, apply morphological opening to suppress isolated noise.
+
+    Returns
+    -------
+    enhanced : ndarray, shape (M, N), dtype float64
+            Enhanced image in [0, 1].
+    """
+    from scipy.ndimage import binary_opening
+
+    arr = _to_float_image(image)
+    arr = normalize_image(arr)
+
+    # Apply CLAHE for aggressive local contrast enhancement
+    clahe = exposure.equalize_adapthist(
+        arr, clip_limit=clip_limit, kernel_size=tile_grid_size
+    )
+
+    # Sharpen peaks aggressively with small radius
+    sharp = unsharp_mask(
+        clahe, radius=unsharp_radius, amount=unsharp_amount, preserve_range=True
+    )
+    sharp = normalize_image(sharp)
+
+    # Optional morphological denoising: open to suppress noise speckles
+    if denoise:
+        from scipy.ndimage import binary_erosion, binary_dilation
+
+        thresh = np.percentile(sharp, 70)
+        binary = sharp > thresh
+        # Erode then dilate to remove small isolated peaks
+        opened = binary_erosion(binary, iterations=1)
+        opened = binary_dilation(opened, iterations=1)
+        sharp = sharp * opened.astype(float)
+        sharp = normalize_image(sharp)
+
+    return sharp

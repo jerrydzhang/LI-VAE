@@ -1,4 +1,4 @@
-# Nano-rVAE: Unsupervised Disentanglement of Atomic Lattices> **Hackathon Track:** Disentangling Nanoscale Materials Structure
+# Nano-rVAE: Unsupervised Disentanglement of Atomic Lattices **Hackathon Track:** Disentangling Nanoscale Materials Structure
 > 
 > 
 > **Reference Paper:** Liu et al., *Advanced Materials* 2021 
@@ -20,12 +20,12 @@ Our pipeline adapts the reference architecture (Liu et al.) from **continuous do
 * **Our Hackathon Approach:** Uses unsupervised **Peak Finding** (e.g., `skimage.feature.peak_local_max`).
 * **Why:** The MoS2 dataset (`STEM_MoS2_monolayer_Data.ipynb`) lacks the ground-truth masks required for the paper's supervised network. Atomic lattices are high-contrast and rigid, making deterministic peak finding a robust, label-free alternative to the paper's ResHED-net.
 
-### 2. Physics-Informed Patching* 
+### 2. Physics-Informed Patching*
 **Strategy:** We extract small square patches (approx. 64 \times 64 pixels) centered strictly on the detected atom coordinates.
 
 * **Purpose:** This "centers" the physics. By ensuring the atom is always in the middle of the frame, the rVAE can effectively learn rotational invariance. Random crops would fail here.
 
-### 3. rVAE Manifold Learning* 
+### 3. rVAE Manifold Learning*
 **Model:** A VAE with a specialized encoder that outputs both a feature vector z and a rotation angle \theta.
 
 **Latent Space:** The vector z captures the "disentangled" physics (e.g., Mo vs. S vs. Vacancy) independent of how the lattice is rotated.

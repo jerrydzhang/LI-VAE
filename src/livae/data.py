@@ -5,9 +5,11 @@ import random
 
 import numpy as np
 import torchvision.transforms.functional as TF
+import torch.nn.functional as F
 from skimage.feature import peak_local_max
 import torch
 from torch.utils.data import Dataset
+from skimage.restoration import denoise_nl_means, estimate_sigma
 
 from .filter import bandpass_filter, normalize_image
 from .utils import estimate_lattice_constant
@@ -23,11 +25,11 @@ TransformFn = Callable[..., torch.Tensor]
 def default_transform(
     patch: torch.Tensor,
     flip_prob: float = 0.5,
-    jitter_amount: int = 2,
+    jitter_amount: int = 4,
 ) -> torch.Tensor:
     """Default set of transforms: random flip, rotation and jitter."""
     angle = random.uniform(0, 360)
-    patch = TF.rotate(patch, angle)
+    patch = TF.rotate(patch, angle, expand=False)
 
     if random.random() < flip_prob:
         patch = TF.hflip(patch)
@@ -36,12 +38,15 @@ def default_transform(
         patch = TF.vflip(patch)
 
     if jitter_amount > 0:
-        max_jitter = jitter_amount
-        jitter_x = random.randint(-max_jitter, max_jitter)
-        jitter_y = random.randint(-max_jitter, max_jitter)
-        patch = TF.affine(
-            patch, translate=[jitter_x, jitter_y], angle=0, scale=1.0, shear=[0]
-        )
+        shift_x = random.randint(-jitter_amount, jitter_amount)
+        shift_y = random.randint(-jitter_amount, jitter_amount)
+        patch = torch.roll(patch, shifts=(shift_y, shift_x), dims=(-2, -1))
+        # max_jitter = jitter_amount
+        # jitter_x = random.randint(-max_jitter, max_jitter)
+        # jitter_y = random.randint(-max_jitter, max_jitter)
+        # patch = TF.affine(
+        #     patch, translate=[jitter_x, jitter_y], angle=0, scale=1.0, shear=[0]
+        # )
 
     return patch
 
@@ -51,7 +56,7 @@ class PatchDataset(Dataset):
         self,
         images: list[np.ndarray],
         patch_size: int,
-        padding: int = 16,
+        padding: int = 32,
         transform: TransformFn | None = default_transform,
     ):
         """Dataset of image patches centered on atomic positions.
@@ -74,18 +79,23 @@ class PatchDataset(Dataset):
         self.padding = padding
         self.transform = transform
 
-        self.images = [normalize_image(img) for img in images]
+        def preprocess_image(img: np.ndarray) -> np.ndarray:
+            img = bandpass_filter(img, 20, 100)
+            img = normalize_image(img)
+            return img
+
+        self.images = [preprocess_image(img) for img in images]
 
         self.atom_coords = []
 
         for img in self.images:
-            filtered_img = bandpass_filter(img, low_cutoff=60, high_cutoff=300)
             lattice_spacing = estimate_lattice_constant(img)
             coords = peak_local_max(
-                filtered_img,
-                # This is done as the lattice spacing often misses the faiter sulfer atoms
-                min_distance=int(lattice_spacing * 0.35),
-                threshold_rel=0.2,
+                img,
+                # This is done as the lattice spacing often misses the fainter sulfer atoms
+                min_distance=int(lattice_spacing * 0.15),
+                # min_distance=int(2),
+                threshold_rel=0.05,
                 exclude_border=False,
             )
             off_edge_mask = (
@@ -93,6 +103,9 @@ class PatchDataset(Dataset):
                 & (coords[:, 0] <= img.shape[0] - self.patch_size // 2 - self.padding)
                 & (coords[:, 1] >= self.patch_size // 2 + self.padding)
                 & (coords[:, 1] <= img.shape[1] - self.patch_size // 2 - self.padding)
+            )
+            print(
+                f"Detected {len(coords)} atoms, {np.sum(off_edge_mask)} after edge exclusion."
             )
             coords = coords[off_edge_mask]
             self.atom_coords.append(coords)
@@ -124,3 +137,15 @@ class PatchDataset(Dataset):
         patch = TF.center_crop(patch, [self.patch_size, self.patch_size])
 
         return patch
+
+    def plot_peaks(self, img_idx: int) -> None:
+        """Plot detected atomic peaks on the image for visualization."""
+        import matplotlib.pyplot as plt
+
+        img = self.images[img_idx]
+        coords = self.atom_coords[img_idx]
+
+        plt.imshow(img)
+        plt.scatter(coords[:, 1], coords[:, 0], s=5, edgecolor="red", facecolor="none")
+        plt.title(f"Detected atoms in image {img_idx}")
+        plt.show()

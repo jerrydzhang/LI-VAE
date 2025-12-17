@@ -55,8 +55,8 @@ The rVAE model needs to be built with:
   1. Load image → `normalize_image()` (0-1 range)
   2. Apply `bandpass_filter()` (low_cutoff=60, high_cutoff=300)
   3. Estimate lattice spacing via `estimate_lattice_constant()` (FFT-based)
-  4. Detect peaks with `peak_local_max()` (min_distance ≈ 0.35 × lattice_spacing)
-  5. Extract 32×32 patches via `PatchDataset` (with padding for rotation)
+  4. Detect peaks with `peak_local_max()` (min_distance ≈ 0.05 × lattice_spacing)
+  5. Extract 64×64 patches via `PatchDataset` (with padding for rotation)
 
 ## Implemented Modules
 ### `src/livae/filter.py`

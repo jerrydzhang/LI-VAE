@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 
+import h5py
 import numpy as np
 from numpy.typing import NDArray
-import h5py
-from pathlib import Path
 from scipy.ndimage import gaussian_filter
 from scipy.signal import find_peaks
 
@@ -15,6 +15,7 @@ FloatArray = NDArray[np.float64]
 
 __all__ = [
     "estimate_lattice_constant",
+    "load_image_from_h5",
 ]
 
 
@@ -108,7 +109,7 @@ def estimate_lattice_constant(
 
 def load_image_from_h5(
     file_path: Path | str,
-    dataset_name: str = "image",
+    dataset_name: str | None = None,
 ) -> FloatArray:
     """Load a 2D image from an HDF5 file.
 
@@ -117,13 +118,64 @@ def load_image_from_h5(
     file_path : Path or str
         Path to the HDF5 file.
     dataset_name : str, optional
-        Name of the dataset within the HDF5 file. Default is 'image'.
+        Path to the dataset within the HDF5 file. If None, will attempt to
+        auto-detect a suitable 2D image dataset (preferring names like
+        'image', 'data', 'HAADF').
 
     Returns
     -------
     image : ndarray, shape (M, N)
         Loaded 2D image array.
     """
+    if isinstance(file_path, str):
+        file_path = Path(file_path)
+
     with h5py.File(file_path, "r") as h5_file:
-        image = h5_file[dataset_name][:]
+        dset_path: str | None = None
+
+        if dataset_name is not None:
+            # Use provided dataset path if it exists
+            if dataset_name in h5_file:
+                dset_path = dataset_name
+            else:
+                # Fall back to searching full paths for a matching basename
+                target_base = Path(dataset_name).name
+                candidates: list[str] = []
+                def _collect(name: str, obj: h5py.Dataset) -> None:
+                    if isinstance(obj, h5py.Dataset) and Path(name).name == target_base:
+                        candidates.append(name)
+                h5_file.visititems(lambda n, o: _collect(n, o))
+                if candidates:
+                    dset_path = candidates[0]
+
+        if dset_path is None:
+            # Auto-detect: pick a 2D dataset, prefer known names
+            datasets: list[tuple[str, tuple[int, ...]]] = []
+            def _gather(name: str, obj: h5py.Dataset) -> None:
+                if isinstance(obj, h5py.Dataset):
+                    shape = tuple(int(s) for s in obj.shape)
+                    datasets.append((name, shape))
+            h5_file.visititems(lambda n, o: _gather(n, o))
+
+            # Filter 2D arrays and sort by simple heuristic
+            two_d = [(n, s) for n, s in datasets if len(s) == 2]
+            if not two_d:
+                raise KeyError(
+                    f"No 2D datasets found in HDF5 file: {file_path}"
+                )
+
+            # Prefer names whose basename is in preferred list, otherwise largest area
+            preferred = {"image", "data", "HAADF"}
+            def score(item: tuple[str, tuple[int, int]]) -> tuple[int, int]:
+                name, shape = item
+                base = Path(name).name
+                pref = 1 if base in preferred else 0
+                area = shape[0] * shape[1]
+                return (pref, area)
+
+            two_d.sort(key=score, reverse=True)
+            dset_path = two_d[0][0]
+
+        image = h5_file[dset_path][:]
+
     return image
