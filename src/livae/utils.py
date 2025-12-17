@@ -16,6 +16,7 @@ FloatArray = NDArray[np.float64]
 __all__ = [
     "estimate_lattice_constant",
     "load_image_from_h5",
+    "clean_state_dict",
 ]
 
 
@@ -141,9 +142,11 @@ def load_image_from_h5(
                 # Fall back to searching full paths for a matching basename
                 target_base = Path(dataset_name).name
                 candidates: list[str] = []
+
                 def _collect(name: str, obj: h5py.Dataset) -> None:
                     if isinstance(obj, h5py.Dataset) and Path(name).name == target_base:
                         candidates.append(name)
+
                 h5_file.visititems(lambda n, o: _collect(n, o))
                 if candidates:
                     dset_path = candidates[0]
@@ -151,21 +154,22 @@ def load_image_from_h5(
         if dset_path is None:
             # Auto-detect: pick a 2D dataset, prefer known names
             datasets: list[tuple[str, tuple[int, ...]]] = []
+
             def _gather(name: str, obj: h5py.Dataset) -> None:
                 if isinstance(obj, h5py.Dataset):
                     shape = tuple(int(s) for s in obj.shape)
                     datasets.append((name, shape))
+
             h5_file.visititems(lambda n, o: _gather(n, o))
 
             # Filter 2D arrays and sort by simple heuristic
             two_d = [(n, s) for n, s in datasets if len(s) == 2]
             if not two_d:
-                raise KeyError(
-                    f"No 2D datasets found in HDF5 file: {file_path}"
-                )
+                raise KeyError(f"No 2D datasets found in HDF5 file: {file_path}")
 
             # Prefer names whose basename is in preferred list, otherwise largest area
             preferred = {"image", "data", "HAADF"}
+
             def score(item: tuple[str, tuple[int, int]]) -> tuple[int, int]:
                 name, shape = item
                 base = Path(name).name
@@ -179,3 +183,14 @@ def load_image_from_h5(
         image = h5_file[dset_path][:]
 
     return image
+
+
+def clean_state_dict(state_dict):
+    """
+    Removes '_orig_mod.' prefixes from state dict keys.
+    """
+    cleaned_dict = {}
+    for key, value in state_dict.items():
+        new_key = key.replace("_orig_mod.", "")
+        cleaned_dict[new_key] = value
+    return cleaned_dict
