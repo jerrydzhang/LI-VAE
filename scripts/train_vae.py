@@ -140,7 +140,15 @@ def run_training(args: argparse.Namespace) -> None:
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    criterion = VAELoss(beta=args.beta)
+
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer,
+        T_0=args.restart_period,
+        T_mult=args.restart_mult,
+        eta_min=args.lr * 0.01,
+    )
+
+    criterion = VAELoss(beta=0.0 if args.beta_annealing else args.beta)
 
     scaler = (
         torch.amp.GradScaler() if device.type == "cuda" and not args.no_amp else None
@@ -157,8 +165,19 @@ def run_training(args: argparse.Namespace) -> None:
 
     print(f"\nStarting training for {args.epochs} epochs...")
     print(f"Learning rate: {args.lr}, Beta: {args.beta}")
+    if args.beta_annealing:
+        print(f"Beta annealing enabled: {args.beta_annealing_epochs} epochs warmup")
+    print(
+        f"LR scheduler: CosineAnnealingWarmRestarts (T_0={args.restart_period}, T_mult={args.restart_mult}, eta_min={args.lr * 0.01})"
+    )
 
     for epoch in tqdm(range(1, args.epochs + 1), desc="Training Epochs"):
+        if args.beta_annealing:
+            if epoch <= args.beta_annealing_epochs:
+                current_beta = args.beta * (epoch / args.beta_annealing_epochs)
+            else:
+                current_beta = args.beta
+            criterion.beta = current_beta
         train_one_epoch(
             model,
             train_loader,
@@ -207,15 +226,29 @@ def run_training(args: argparse.Namespace) -> None:
                 )
                 print(f"  → Saved checkpoint (val_loss: {best_val:.4f})")
 
+        # Step the learning rate scheduler
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+
+        # Log scheduler values
+        writer.add_scalar("train/learning_rate", current_lr, epoch)
+        if args.beta_annealing:
+            writer.add_scalar("train/beta", criterion.beta, epoch)
+
         train_metrics = train_logger.get_averages()
         val_metrics = val_logger.get_averages()
-        print(
+
+        status_msg = (
             f"Epoch {epoch:03d}/{args.epochs} | "
             f"train_loss={train_metrics['train_loss']:.4f} "
             f"val_loss={val_loss:.4f} | "
             f"train_psnr={train_metrics.get('train_psnr', 0):.2f} "
-            f"val_psnr={val_metrics.get('val_psnr', 0):.2f}"
+            f"val_psnr={val_metrics.get('val_psnr', 0):.2f} | "
+            f"lr={current_lr:.2e}"
         )
+        if args.beta_annealing:
+            status_msg += f" beta={criterion.beta:.3f}"
+        print(status_msg)
 
         train_logger.reset()
         val_logger.reset()
@@ -276,12 +309,35 @@ def build_argparser() -> argparse.ArgumentParser:
         "--epochs", type=int, default=50, help="Number of training epochs"
     )
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument(
+        "--restart-period",
+        type=int,
+        default=10,
+        help="Initial restart period T_0 for CosineAnnealingWarmRestarts (default: 10)",
+    )
+    parser.add_argument(
+        "--restart-mult",
+        type=int,
+        default=2,
+        help="Multiplication factor T_mult for increasing restart period (default: 2)",
+    )
 
     parser.add_argument(
         "--latent-dim", type=int, default=16, help="Dimension of latent space"
     )
     parser.add_argument(
         "--beta", type=float, default=1.0, help="Beta coefficient for KL divergence"
+    )
+    parser.add_argument(
+        "--beta-annealing",
+        action="store_true",
+        help="Enable beta annealing (linear warmup from 0 to beta)",
+    )
+    parser.add_argument(
+        "--beta-annealing-epochs",
+        type=int,
+        default=10,
+        help="Number of epochs for beta warmup (default: 10)",
     )
 
     parser.add_argument(
