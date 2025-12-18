@@ -141,11 +141,8 @@ def run_training(args: argparse.Namespace) -> None:
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer,
-        T_0=args.restart_period,
-        T_mult=args.restart_mult,
-        eta_min=args.lr * 0.01,
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs, eta_min=args.lr * 0.01
     )
 
     criterion = VAELoss(
@@ -320,18 +317,7 @@ def build_argparser() -> argparse.ArgumentParser:
         "--epochs", type=int, default=50, help="Number of training epochs"
     )
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
-    parser.add_argument(
-        "--restart-period",
-        type=int,
-        default=10,
-        help="Initial restart period T_0 for CosineAnnealingWarmRestarts (default: 10)",
-    )
-    parser.add_argument(
-        "--restart-mult",
-        type=int,
-        default=2,
-        help="Multiplication factor T_mult for increasing restart period (default: 2)",
-    )
+
 
     parser.add_argument(
         "--latent-dim", type=int, default=16, help="Dimension of latent space"
