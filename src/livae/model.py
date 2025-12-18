@@ -354,16 +354,20 @@ class Decoder(nn.Module):
         # Replace transposed convolutions with upsample + conv to avoid artifacts
         self.deconv_layers = nn.Sequential(
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-            nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=0),
             nn.ReLU(),
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=0),
             nn.ReLU(),
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-            nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=0),
             nn.ReLU(),
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-            nn.Conv2d(32, out_channels, kernel_size=3, stride=1, padding=1),
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(32, out_channels, kernel_size=3, stride=1, padding=0),
             nn.Sigmoid(),
         )
 
