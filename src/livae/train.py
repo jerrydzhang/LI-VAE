@@ -330,7 +330,7 @@ def train_rvae_one_epoch(
             )
             loss = loss + canonical_weight * canonical_loss
         loss.backward()
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=20.0)
 
         total_norm = 0.0
         for p in model.parameters():
