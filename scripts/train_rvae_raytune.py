@@ -119,6 +119,7 @@ def train_rvae_tune(config: dict[str, Any]) -> None:
         - Other training hyperparameters
     """
     import warnings
+
     # Suppress deprecation warnings that Ray converts to fatal errors
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -156,7 +157,7 @@ def train_rvae_tune(config: dict[str, Any]) -> None:
 
     # Loss function with tunable beta
     criterion = VAELoss(
-        beta=0.0 if config.get("beta_annealing", False) else config["beta"],
+        beta=0.0 if config.get("beta_annealing", True) else config["beta"],
     )
 
     # Mixed precision training
