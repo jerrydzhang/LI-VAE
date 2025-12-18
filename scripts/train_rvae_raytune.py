@@ -9,8 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from ray import init as ray_init
-from ray import shutdown as ray_shutdown
+import ray
 from ray import train, tune
 from ray.train import Checkpoint
 from ray.tune.schedulers import ASHAScheduler, PopulationBasedTraining
@@ -116,9 +115,6 @@ def train_rvae_tune(config: dict[str, Any]) -> None:
         - batch_size: Batch size
         - Other training hyperparameters
     """
-    # Get static configuration from Ray Tune's session
-    static_config = train.get_context().get_trial_resources().required_resources
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load data with hyperparameter-dependent batch size
@@ -240,7 +236,7 @@ def init_ray_safe(temp_dir: str | None = None) -> None:
         Temporary directory for Ray logs. If None, uses system temp.
     """
     # Check if Ray is already initialized
-    if not ray_init.is_initialized():
+    if not ray.is_initialized():
         try:
             # Create a clean temp directory for Ray
             if temp_dir is None:
@@ -249,7 +245,7 @@ def init_ray_safe(temp_dir: str | None = None) -> None:
             Path(temp_dir).mkdir(parents=True, exist_ok=True)
             
             print(f"Initializing Ray cluster with temp directory: {temp_dir}")
-            ray_init(
+            ray.init(
                 ignore_reinit_error=True,
                 logging_level="warning",
                 log_to_driver=False,
@@ -265,8 +261,9 @@ def init_ray_safe(temp_dir: str | None = None) -> None:
 def cleanup_ray() -> None:
     """Safely shutdown Ray."""
     try:
-        ray_shutdown()
-        print("Ray cluster shut down successfully.")
+        if ray.is_initialized():
+            ray.shutdown()
+            print("Ray cluster shut down successfully.")
     except Exception as e:
         print(f"Warning during Ray shutdown: {e}")
 
@@ -281,10 +278,15 @@ def run_hyperparameter_search(args: argparse.Namespace) -> None:
     """
     # Prepare data paths
     h5_paths = args.data or glob.glob(str(Path("data") / "*.h5"))
+    # Convert to absolute paths to avoid worker cwd issues
+    h5_paths = [str(Path(p).resolve()) for p in h5_paths]
     if not h5_paths:
         raise FileNotFoundError(
             "No H5 data files found. Provide --data paths or place H5 files in ./data"
         )
+
+    # Convert to absolute paths for Ray worker processes
+    h5_paths = [str(Path(p).absolute()) for p in h5_paths]
 
     print(f"Data files: {h5_paths}")
     print(f"Starting Ray Tune hyperparameter search...")
@@ -296,86 +298,85 @@ def run_hyperparameter_search(args: argparse.Namespace) -> None:
     try:
         init_ray_safe(temp_dir=temp_ray_dir)
 
-    # Define search space
-    config = {
-        # Hyperparameters to tune
-        "lr": tune.loguniform(args.lr_min, args.lr_max),
-        "latent_dim": tune.choice(args.latent_dims),
-        "beta": tune.loguniform(args.beta_min, args.beta_max),
-        "weight_decay": tune.loguniform(args.weight_decay_min, args.weight_decay_max),
-        "batch_size": tune.choice(args.batch_sizes),
-        # Fixed parameters
-        "h5_paths": h5_paths,
-        "patch_size": args.patch_size,
-        "padding": args.padding,
+        # Define search space
+        config = {
+            # Hyperparameters to tune
+            "lr": tune.loguniform(args.lr_min, args.lr_max),
+            "latent_dim": tune.choice(args.latent_dims),
+            "beta": tune.loguniform(args.beta_min, args.beta_max),
+            "weight_decay": tune.loguniform(args.weight_decay_min, args.weight_decay_max),
+            "batch_size": tune.choice(args.batch_sizes),
+            # Fixed parameters
+            "h5_paths": h5_paths,
+            "patch_size": args.patch_size,
+            "padding": args.padding,
         "num_workers": args.num_workers,
-        "prefetch_factor": args.prefetch_factor,
-        "val_split": args.val_split,
-        "dataset_name": args.dataset_name,
-        "epochs": args.epochs,
-        "beta_annealing": args.beta_annealing,
-        "beta_annealing_epochs": args.beta_annealing_epochs,
-        "grad_max_norm": args.grad_max_norm,
-        "no_amp": args.no_amp,
-    }
+            "prefetch_factor": args.prefetch_factor,
+            "val_split": args.val_split,
+            "dataset_name": args.dataset_name,
+            "epochs": args.epochs,
+            "beta_annealing": args.beta_annealing,
+            "beta_annealing_epochs": args.beta_annealing_epochs,
+            "grad_max_norm": args.grad_max_norm,
+            "no_amp": args.no_amp,
+        }
 
-    # Choose scheduler
-    if args.scheduler == "asha":
-        # Ensure grace_period doesn't exceed max_t
-        grace_period = min(args.grace_period, max(1, args.epochs // 2))
-        scheduler = ASHAScheduler(
-            metric="loss",
-            mode="min",
-            max_t=args.epochs,
-            grace_period=grace_period,
-            reduction_factor=args.reduction_factor,
-        )
-        print(f"ASHA Scheduler: grace_period={grace_period}, max_t={args.epochs}, reduction_factor={args.reduction_factor}")
-    elif args.scheduler == "pbt":
-        scheduler = PopulationBasedTraining(
-            time_attr="epoch",
-            metric="loss",
-            mode="min",
-            perturbation_interval=args.perturbation_interval,
-            hyperparam_mutations={
-                "lr": tune.loguniform(args.lr_min, args.lr_max),
-                "beta": tune.loguniform(args.beta_min, args.beta_max),
-            },
-        )
-    else:
-        scheduler = None
+        # Choose scheduler
+        if args.scheduler == "asha":
+            # Ensure grace_period doesn't exceed max_t
+            grace_period = min(args.grace_period, max(1, args.epochs // 2))
+            scheduler = ASHAScheduler(
+                metric="loss",
+                mode="min",
+                max_t=args.epochs,
+                grace_period=grace_period,
+                reduction_factor=args.reduction_factor,
+            )
+            print(f"ASHA Scheduler: grace_period={grace_period}, max_t={args.epochs}, reduction_factor={args.reduction_factor}")
+        elif args.scheduler == "pbt":
+            scheduler = PopulationBasedTraining(
+                time_attr="epoch",
+                metric="loss",
+                mode="min",
+                perturbation_interval=args.perturbation_interval,
+                hyperparam_mutations={
+                    "lr": tune.loguniform(args.lr_min, args.lr_max),
+                    "beta": tune.loguniform(args.beta_min, args.beta_max),
+                },
+            )
+        else:
+            scheduler = None
 
-    # Choose search algorithm
-    if args.search_alg == "hyperopt":
-        search_alg = HyperOptSearch(metric="loss", mode="min")
-    else:
-        search_alg = None
+        # Choose search algorithm
+        if args.search_alg == "hyperopt":
+            search_alg = HyperOptSearch(metric="loss", mode="min")
+        else:
+            search_alg = None
 
-    # Configure Ray Tune
-    tuner = tune.Tuner(
-        tune.with_resources(
-            train_rvae_tune,
-            resources={"cpu": args.cpus_per_trial, "gpu": args.gpus_per_trial},
-        ),
-        param_space=config,
-        tune_config=tune.TuneConfig(
-            scheduler=scheduler,
-            search_alg=search_alg,
-            num_samples=args.num_samples,
-            max_concurrent_trials=args.max_concurrent,
-        ),
-        run_config=tune.RunConfig(
-            name=args.experiment_name,
-            storage_path=args.ray_results_dir,
-            checkpoint_config=tune.CheckpointConfig(
-                num_to_keep=1,
-                checkpoint_score_attribute="loss",
-                checkpoint_score_order="min",
+        # Configure Ray Tune
+        tuner = tune.Tuner(
+            tune.with_resources(
+                train_rvae_tune,
+                resources={"cpu": args.cpus_per_trial, "gpu": args.gpus_per_trial},
             ),
-        ),
-    )
+            param_space=config,
+            tune_config=tune.TuneConfig(
+                scheduler=scheduler,
+                search_alg=search_alg,
+                num_samples=args.num_samples,
+                max_concurrent_trials=args.max_concurrent,
+            ),
+            run_config=tune.RunConfig(
+                name=args.experiment_name,
+                storage_path=args.ray_results_dir,
+                checkpoint_config=tune.CheckpointConfig(
+                    num_to_keep=1,
+                    checkpoint_score_attribute="loss",
+                    checkpoint_score_order="min",
+                ),
+            ),
+        )
 
-    try:
         # Run the search
         results = tuner.fit()
 
@@ -385,33 +386,41 @@ def run_hyperparameter_search(args: argparse.Namespace) -> None:
         print("\n" + "=" * 80)
         print("HYPERPARAMETER SEARCH COMPLETE")
         print("=" * 80)
-        print(f"\nBest trial config:")
-        for key, value in best_result.config.items():
-            if key not in ["h5_paths", "dataset_name"]:  # Skip long/non-essential params
-                print(f"  {key}: {value}")
+        
+        if best_result is None or best_result.metrics is None:
+            print("No successful trials completed.")
+            print("Check trial error logs for details.")
+        else:
+            print(f"\nBest trial config:")
+            for key, value in best_result.config.items():
+                if key not in ["h5_paths", "dataset_name"]:  # Skip long/non-essential params
+                    print(f"  {key}: {value}")
 
-        print(f"\nBest trial metrics:")
-        print(f"  val_loss: {best_result.metrics['val_loss']:.4f}")
-        print(f"  val_psnr: {best_result.metrics.get('val_psnr', 0):.2f}")
-        print(f"  train_loss: {best_result.metrics['train_loss']:.4f}")
+            print(f"\nBest trial metrics:")
+            if "val_loss" in best_result.metrics:
+                print(f"  val_loss: {best_result.metrics['val_loss']:.4f}")
+            if "val_psnr" in best_result.metrics:
+                print(f"  val_psnr: {best_result.metrics.get('val_psnr', 0):.2f}")
+            if "train_loss" in best_result.metrics:
+                print(f"  train_loss: {best_result.metrics['train_loss']:.4f}")
 
-        print(f"\nBest checkpoint: {best_result.checkpoint}")
+            print(f"\nBest checkpoint: {best_result.checkpoint}")
 
-        # Save best config to file
-        if args.save_best_config:
-            config_path = Path(args.save_best_config)
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            import json
+            # Save best config to file
+            if args.save_best_config and best_result is not None:
+                config_path = Path(args.save_best_config)
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                import json
 
-            with open(config_path, "w") as f:
-                # Filter out non-serializable items
-                save_config = {
-                    k: v
-                    for k, v in best_result.config.items()
-                    if k not in ["h5_paths"] and not callable(v)
-                }
-                json.dump(save_config, f, indent=2)
-            print(f"\nBest config saved to: {config_path}")
+                with open(config_path, "w") as f:
+                    # Filter out non-serializable items
+                    save_config = {
+                        k: v
+                        for k, v in best_result.config.items()
+                        if k not in ["h5_paths"] and not callable(v)
+                    }
+                    json.dump(save_config, f, indent=2)
+                print(f"\nBest config saved to: {config_path}")
 
     finally:
         # Clean up Ray and temporary directory
