@@ -246,10 +246,14 @@ def init_ray_safe(temp_dir: str | None = None) -> None:
 
         Path(temp_dir).mkdir(parents=True, exist_ok=True)
 
+        detected_gpus = torch.cuda.device_count()
+
+        print(f"Detected GPUs: {detected_gpus}")
         print(f"Initializing Ray cluster with temp directory: {temp_dir}")
         ray.init(
             _temp_dir=temp_dir,
             ignore_reinit_error=True,
+            num_gpus=detected_gpus,
             logging_level="warning",
             log_to_driver=False,
             include_dashboard=False,
