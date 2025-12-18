@@ -327,9 +327,10 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     """
-    Decoder that reconstructs images from latent codes using transposed convolutions.
+    Decoder that reconstructs images from latent codes using upsample + conv.
 
     Takes a latent vector z and reconstructs the original image.
+    Uses bilinear upsampling + convolution to avoid checkerboard artifacts.
     """
 
     def __init__(
@@ -350,14 +351,19 @@ class Decoder(nn.Module):
 
         self.fc = nn.Linear(latent_dim, inter_size)
 
+        # Replace transposed convolutions with upsample + conv to avoid artifacts
         self.deconv_layers = nn.Sequential(
-            nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(32, out_channels, kernel_size=4, stride=2, padding=1),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Conv2d(32, out_channels, kernel_size=3, stride=1, padding=1),
             nn.Sigmoid(),
         )
 
