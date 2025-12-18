@@ -139,7 +139,9 @@ def run_training(args: argparse.Namespace) -> None:
     print(f"Model initialized: RVAE with {args.latent_dim}-dim latent space")
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+    )
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=args.epochs, eta_min=args.lr * 0.01
@@ -314,6 +316,12 @@ def build_argparser() -> argparse.ArgumentParser:
         "--epochs", type=int, default=50, help="Number of training epochs"
     )
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=1e-5,
+        help="Weight decay (L2 regularization) for Adam optimizer (default: 1e-5)",
+    )
 
     parser.add_argument(
         "--latent-dim", type=int, default=16, help="Dimension of latent space"
