@@ -4,9 +4,11 @@ import argparse
 import glob
 import os
 import shutil
-import tempfile
 from pathlib import Path
 from typing import Any
+
+# Initialize Ray safely
+import getpass
 
 import torch
 import ray
@@ -240,7 +242,8 @@ def init_ray_safe(temp_dir: str | None = None) -> None:
         try:
             # Create a clean temp directory for Ray
             if temp_dir is None:
-                temp_dir = tempfile.mkdtemp(prefix="ray_")
+                # temp_dir = tempfile.mkdtemp(prefix="ray_")
+                temp_dir = "/tmp/ray_temp"
 
             Path(temp_dir).mkdir(parents=True, exist_ok=True)
 
@@ -295,8 +298,9 @@ def run_hyperparameter_search(args: argparse.Namespace) -> None:
     print(f"Number of trials: {args.num_samples}")
     print(f"Max concurrent trials: {args.max_concurrent}")
 
-    # Initialize Ray safely
-    temp_ray_dir = tempfile.mkdtemp(prefix="ray_tune_")
+    user = getpass.getuser()
+    temp_ray_dir = f"/tmp/ray_{user}"
+    os.makedirs(temp_ray_dir, exist_ok=True)
     try:
         init_ray_safe(temp_dir=temp_ray_dir)
 
