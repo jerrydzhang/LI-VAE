@@ -205,10 +205,17 @@ def train_one_epoch(
 
         n_batches += 1
 
+    avg_recon_loss = recon_loss_sum / n_batches
+    avg_kld_loss = kld_loss_sum / n_batches
+    avg_total_loss = total_loss / n_batches
+    # Ratio of recon to total loss; helps diagnose KL collapse
+    recon_weight = avg_recon_loss / (avg_total_loss + 1e-8)
+
     metrics = {
-        "train_loss": total_loss / n_batches,
-        "train_recon_loss": recon_loss_sum / n_batches,
-        "train_kld_loss": kld_loss_sum / n_batches,
+        "train_loss": avg_total_loss,
+        "train_recon_loss": avg_recon_loss,
+        "train_kld_loss": avg_kld_loss,
+        "train_recon_weight": recon_weight,
         "train_psnr": psnr_sum / n_batches,
         "train_ssim": ssim_sum / n_batches,
         "train_rotation_std": rotation_std_sum / n_batches,
@@ -324,10 +331,16 @@ def evaluate(
 
             n_batches += 1
 
+    avg_recon_loss = recon_loss_sum / n_batches
+    avg_kld_loss = kld_loss_sum / n_batches
+    avg_total_loss = total_loss / n_batches
+    recon_weight = avg_recon_loss / (avg_total_loss + 1e-8)
+
     metrics = {
-        "val_loss": total_loss / n_batches,
-        "val_recon_loss": recon_loss_sum / n_batches,
-        "val_kld_loss": kld_loss_sum / n_batches,
+        "val_loss": avg_total_loss,
+        "val_recon_loss": avg_recon_loss,
+        "val_kld_loss": avg_kld_loss,
+        "val_recon_weight": recon_weight,
         "val_psnr": psnr_sum / n_batches,
         "val_ssim": ssim_sum / n_batches,
         "val_rotation_std": rotation_std_sum / n_batches,

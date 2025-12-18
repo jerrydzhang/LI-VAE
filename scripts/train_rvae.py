@@ -148,7 +148,10 @@ def run_training(args: argparse.Namespace) -> None:
         eta_min=args.lr * 0.01,
     )
 
-    criterion = VAELoss(beta=0.0 if args.beta_annealing else args.beta)
+    criterion = VAELoss(
+        beta=0.0 if args.beta_annealing else args.beta,
+        beta_recon_min=args.beta_recon_min,
+    )
 
     scaler = (
         torch.amp.GradScaler() if device.type == "cuda" and not args.no_amp else None
@@ -335,7 +338,16 @@ def build_argparser() -> argparse.ArgumentParser:
         "--latent-dim", type=int, default=16, help="Dimension of latent space"
     )
     parser.add_argument(
-        "--beta", type=float, default=1.0, help="Beta coefficient for KL divergence"
+        "--beta",
+        type=float,
+        default=1.0,
+        help="Beta coefficient for KL divergence (higher = stronger KL penalty, but risk of latent collapse with mean reduction)",
+    )
+    parser.add_argument(
+        "--beta-recon-min",
+        type=float,
+        default=0.9,
+        help="Minimum weight for reconstruction loss (0–1) to prevent latent collapse. Default 0.9 ensures recon has 90%% weight at start.",
     )
     parser.add_argument(
         "--beta-annealing",
@@ -346,7 +358,7 @@ def build_argparser() -> argparse.ArgumentParser:
         "--beta-annealing-epochs",
         type=int,
         default=10,
-        help="Number of epochs for beta warmup (default: 10)",
+        help="Number of epochs for beta warmup from 0 to beta (default: 10); increase to 20-30 for gentler warmup",
     )
 
     parser.add_argument(
