@@ -17,11 +17,18 @@ class VAELoss(nn.Module):
         mu: torch.Tensor,
         logvar: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        # Mean MSE per pixel
-        recon_loss = F.mse_loss(recon_x, x, reduction="mean")
-        # KL scaled as mean over batch
-        kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-
+        """Compute VAE loss.
+        
+        Uses mean reduction normalized by batch size for proper scaling.
+        """
+        batch_size = x.size(0)
+        
+        # Reconstruction loss (mean per batch)
+        recon_loss = F.mse_loss(recon_x, x, reduction="sum") / batch_size
+        
+        # KL divergence (mean per batch)
+        kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / batch_size
+        
         total_loss = recon_loss + self.beta * kld_loss
         return total_loss, recon_loss, kld_loss
 
@@ -46,9 +53,21 @@ class RVAELoss(nn.Module):
         logvar: torch.Tensor,
         cycle_loss: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        recon_loss = F.mse_loss(recon_x, x, reduction="mean")
-        kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-        cyc = cycle_loss if cycle_loss is not None else torch.tensor(0.0, device=recon_x.device, dtype=recon_x.dtype)
+        """Compute RVAE loss.
+        
+        Uses mean reduction normalized by batch size for proper scaling.
+        """
+        batch_size = x.size(0)
+        
+        # Reconstruction loss (mean per batch)
+        recon_loss = F.mse_loss(recon_x, x, reduction="sum") / batch_size
+        
+        # KL divergence (mean per batch)
+        kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / batch_size
 
-        total_loss = recon_loss + self.beta * kld_loss + self.gamma * cyc
-        return total_loss, recon_loss, kld_loss, cyc
+        # Cycle consistency loss (mean per batch)
+        cycle_loss = F.mse_loss(mu, mu_rotated, reduction="sum") / batch_size
+        
+        total_loss = recon_loss + self.beta * kld_loss + self.gamma * cycle_loss
+        
+        return total_loss, recon_loss, kld_loss, cycle_loss

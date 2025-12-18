@@ -52,13 +52,10 @@
               pkgs.patchelf
             ];
 
-            LD_LIBRARY_PATH = lib.makeLibraryPath (
-              pkgs.pythonManylinuxPackages.manylinux1
-              ++ [
-                pkgs.stdenv.cc.cc.lib
-                pkgs.zlib
-              ]
-            );
+            LD_LIBRARY_PATH = lib.makeLibraryPath [
+              pkgs.stdenv.cc.cc.lib
+              pkgs.zlib
+            ];
 
             shellHook = ''
               unset PYTHONPATH
