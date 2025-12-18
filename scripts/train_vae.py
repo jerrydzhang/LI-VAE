@@ -43,7 +43,7 @@ def make_dataloaders(
     patch_size : int
         Size of extracted patches (default: 128)
     padding : int
-        Padding around patches for augmentation (default: 16)
+        Padding around patches for augmentation (default: 32)
     batch_size : int
         Batch size for training (default: 512)
     num_workers : int
@@ -283,8 +283,8 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--padding",
         type=int,
-        default=16,
-        help="Padding around patches for augmentation",
+        default=32,
+        help="Padding around patches for augmentation (32 pixels recommended for 128x128 patches to avoid rotation clipping)",
     )
 
     parser.add_argument(

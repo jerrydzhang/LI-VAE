@@ -80,11 +80,23 @@ def default_transform(
     jitter_amount: int = 4,
     rotation: bool = True,
 ) -> torch.Tensor:
-    """Default set of transforms: random flip, rotation and jitter."""
+    """Default set of transforms: random flip, rotation and jitter.
+    
+    Note: This transform is applied AFTER the padding->crop sequence in __getitem__,
+    so the input patch should already have sufficient padding to avoid black edges
+    during rotation. For a square patch, padding >= patch_size * (sqrt(2) - 1) / 2
+    is needed for full 360° rotation without clipping (e.g., 27 pixels for 128x128).
+    """
     if rotation:
         angle = random.uniform(0, 360)
+        # expand=False keeps the canvas size fixed, which is what we want
+        # The padding in __getitem__ should be sufficient to avoid clipping
         patch = TF.rotate(
-            patch, angle=angle, interpolation=TF.InterpolationMode.BILINEAR
+            patch, 
+            angle=angle, 
+            interpolation=TF.InterpolationMode.BILINEAR,
+            expand=False,  # Keep size constant
+            fill=0  # Fill with black (shouldn't be visible if padding is sufficient)
         )
 
     if random.random() < flip_prob:
