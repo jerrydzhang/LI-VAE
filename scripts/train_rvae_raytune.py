@@ -247,6 +247,7 @@ def init_ray_safe(temp_dir: str | None = None) -> None:
             print(f"Initializing Ray cluster with temp directory: {temp_dir}")
             ray.init(
                 _temp_dir=temp_dir,
+                _node_ip_address="127.0.0.1",
                 ignore_reinit_error=True,
                 logging_level="warning",
                 log_to_driver=False,
