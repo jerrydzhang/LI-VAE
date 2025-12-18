@@ -27,11 +27,9 @@ from livae.train import (
     MetricLogger,
     evaluate,
     evaluate_rotation_invariance,
-    evaluate_rvae,
     log_reconstructions_tensorboard,
     log_scalar_metrics_tensorboard,
     train_one_epoch,
-    train_rvae_one_epoch,
 )
 from livae.utils import estimate_lattice_constant, load_image_from_h5
 
@@ -58,8 +56,6 @@ __all__ = [
     # Training
     "train_one_epoch",
     "evaluate",
-    "train_rvae_one_epoch",
-    "evaluate_rvae",
     "evaluate_rotation_invariance",
     "log_reconstructions_tensorboard",
     "log_scalar_metrics_tensorboard",
