@@ -539,10 +539,14 @@ class AdaptiveLatticeDataset(Dataset):
             patch_big = self.transform(patch_big)
 
         patch_cropped = TF.center_crop(patch_big, [self.patch_size, self.patch_size])
-        patch_final = (patch_cropped - patch_cropped.mean()) / (
-            patch_cropped.std() + 1e-6
-        )
 
+        min_val = patch_cropped.min()
+        max_val = patch_cropped.max()
+        if max_val > min_val:
+            patch_final = (patch_cropped - min_val) / (max_val - min_val)
+        else:
+            patch_final = torch.zeros_like(patch_cropped)
+        
         return patch_final
 
     def plot_lattice(
