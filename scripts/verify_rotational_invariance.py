@@ -45,7 +45,7 @@ def load_model_from_checkpoint(best_trial: Trial, device: str) -> RVAE:
 
     with best_trial.checkpoint.as_directory() as checkpoint_dir:
         model_state_dict = torch.load(
-            Path(checkpoint_dir) / "model_state_dict.pt",
+            Path(checkpoint_dir) / "model.pth",
             map_location=device,
             weights_only=False,
         )
