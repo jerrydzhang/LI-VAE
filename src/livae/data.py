@@ -479,6 +479,9 @@ class AdaptiveLatticeDataset(Dataset):
     def cache_to_device(self) -> None:
         """Pre-extract and cache all patches to the specified device (CPU or GPU).
         
+        Patches are cached WITHOUT transforms applied. Transforms are applied
+        on-the-fly during __getitem__ to ensure data augmentation varies per epoch.
+        
         This is useful when your dataset is small enough to fit entirely in GPU memory,
         avoiding repeated patch extraction from raw images during training.
         """
@@ -489,11 +492,19 @@ class AdaptiveLatticeDataset(Dataset):
         print(f"Caching {len(self)} patches to {self.device}...")
         self.patch_cache = []
         
+        # Temporarily disable transforms to cache raw patches
+        original_transform = self.transform
+        self.transform = None
+        
         for idx in tqdm(range(len(self)), desc="Caching patches"):
             patch = self._extract_patch(idx)
             self.patch_cache.append(patch.to(self.device))
 
+        # Restore transforms for on-the-fly application
+        self.transform = original_transform
+
         print(f"Cached {len(self.patch_cache)} patches on {self.device}")
+        print(f"Transforms will be applied on-the-fly during training for varied augmentation")
 
     def _extract_patch(self, idx: int) -> torch.Tensor:
         """Extract a single patch without device transfer (internal method)."""
@@ -567,22 +578,20 @@ class AdaptiveLatticeDataset(Dataset):
         return sum(len(coords) for coords in self.sample_coords)
 
     def __getitem__(self, idx: int) -> torch.Tensor:
-        """Get patch and label"""
-        # Return cached patch if available
-        if len(self.patch_cache) > 0:
-            return self.patch_cache[idx]
+        """Get patch with on-the-fly augmentation.
         
-        # Otherwise extract on-the-fly
+        If cached, retrieves base patch and applies transforms.
+        Otherwise extracts on-the-fly.
+        """
+        if len(self.patch_cache) > 0:
+            # Use cached patch but apply transforms on-the-fly
+            patch = self.patch_cache[idx]
+            if self.transform:
+                patch = self.transform(patch)
+            return patch
+        
+        # Otherwise extract and transform on-the-fly (normal mode)
         return self._extract_patch(idx)
-        padded_size = self.patch_size + 2 * self.padding
-        patch_big = TF.center_crop(patch, [padded_size, padded_size])
-
-        if self.transform:
-            patch_big = self.transform(patch_big)
-
-        patch_cropped = TF.center_crop(patch_big, [self.patch_size, self.patch_size])
-
-        min_val = patch_cropped.min()
         max_val = patch_cropped.max()
         if max_val > min_val:
             patch_final = (patch_cropped - min_val) / (max_val - min_val)
