@@ -412,8 +412,6 @@ class RVAE(nn.Module):
         self.encoder = Encoder(in_channels, latent_dim, patch_size)
         self.decoder = Decoder(latent_dim, in_channels, patch_size)
 
-        self.rotation_stn_inverse = RotationSTN((in_channels, patch_size, patch_size))
-
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """
         Reparameterization trick for sampling from latent distribution.
@@ -452,9 +450,9 @@ class RVAE(nn.Module):
 
         recon = self.decoder(z)
 
-        rotated_recon, _ = self.rotation_stn_inverse(recon)
+        # Apply inverse rotation to match original input
         inverse_theta = -theta
-        rot_matrix = self.rotation_stn_inverse.get_rotation_matrix(inverse_theta)
+        rot_matrix = self.encoder.rotation_stn.get_rotation_matrix(inverse_theta)
         grid = F.affine_grid(rot_matrix, recon.size(), align_corners=False)
         rotated_recon = F.grid_sample(
             recon, grid, padding_mode="reflection", align_corners=False
