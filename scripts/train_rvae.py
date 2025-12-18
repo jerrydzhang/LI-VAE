@@ -166,9 +166,6 @@ def run_training(args: argparse.Namespace) -> None:
     print(f"Learning rate: {args.lr}, Beta: {args.beta}")
     if args.beta_annealing:
         print(f"Beta annealing enabled: {args.beta_annealing_epochs} epochs warmup")
-    print(
-        f"LR scheduler: CosineAnnealingWarmRestarts (T_0={args.restart_period}, T_mult={args.restart_mult}, eta_min={args.lr * 0.01})"
-    )
 
     for epoch in tqdm(range(1, args.epochs + 1), desc="Training Epochs"):
         if args.beta_annealing:
@@ -317,7 +314,6 @@ def build_argparser() -> argparse.ArgumentParser:
         "--epochs", type=int, default=50, help="Number of training epochs"
     )
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
-
 
     parser.add_argument(
         "--latent-dim", type=int, default=16, help="Dimension of latent space"
