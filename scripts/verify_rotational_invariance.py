@@ -17,16 +17,46 @@ DATA_FILE = Path("data/HAADF1.h5")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def get_best_trial_from_analysis(analysis: tune.ExperimentAnalysis) -> Trial:
-    """
-    Retrieves the best trial from a Ray Tune ExperimentAnalysis object.
-    """
-    best_trial = analysis.get_best_trial(metric="loss", mode="min")
-    if best_trial is None:
-        raise ValueError(
-            "Could not find best trial. Ensure the experiment has completed."
-        )
-    return best_trial
+def analyze_trial(trial: Trial, device: str):
+    """Loads model from a trial and runs invariance analysis."""
+    try:
+        print(f"Analyzing trial: {Path(trial.path).name}")
+        print(f"  - Loss: {trial.last_result.get('loss', 'N/A'):.4f}")
+        print(f"  - Beta: {trial.config.get('beta', 'N/A')}")
+        print(f"  - Latent Dim: {trial.config.get('latent_dim', 'N/A')}")
+
+        print("Loading model from checkpoint...")
+        model, patch_size = load_model_from_checkpoint(trial, device)
+        print(f"Model loaded successfully. Using patch size: {patch_size}")
+
+        # Re-using the global DATA_FILE, could be passed as an arg
+        original_patch = get_image_patch(DATA_FILE, patch_size, device).unsqueeze(0)
+        rotated_patch = TF.rotate(original_patch, 90)
+
+        print("Performing inference...")
+        with torch.no_grad():
+            _, _, _, mu_original, _ = model(original_patch)
+            _, _, _, mu_rotated, _ = model(rotated_patch)
+
+        euclidean_dist = torch.norm(mu_original - mu_rotated, p=2).item()
+        cosine_sim = F.cosine_similarity(mu_original, mu_rotated).item()
+
+        print("\n--- Invariance Results for this trial ---")
+        print(f"Euclidean Distance: {euclidean_dist:.6f}")
+        print(f"Cosine Similarity: {cosine_sim:.6f}")
+
+        if cosine_sim > 0.99:
+            print(">>> Verdict: HIGHLY rotationally invariant.")
+        elif cosine_sim > 0.95:
+            print(">>> Verdict: LARGELY rotationally invariant.")
+        else:
+            print(">>> Verdict: LOW rotational invariance.")
+
+    except Exception as e:
+        print(f"Could not analyze trial {trial.trial_id}: {e}")
+        import traceback
+
+        traceback.print_exc()
 
 
 def load_model_from_checkpoint(best_trial: Trial, device: str) -> RVAE:
@@ -35,8 +65,7 @@ def load_model_from_checkpoint(best_trial: Trial, device: str) -> RVAE:
     """
     config = best_trial.config
     latent_dim = config.get("latent_dim", 10)
-    # patch_size is not in the config so we default to 64
-    patch_size = 64
+    patch_size = 128
 
     model = RVAE(latent_dim=latent_dim, patch_size=patch_size)
 
@@ -45,7 +74,7 @@ def load_model_from_checkpoint(best_trial: Trial, device: str) -> RVAE:
 
     with best_trial.checkpoint.as_directory() as checkpoint_dir:
         checkpoint_file = Path(checkpoint_dir) / "checkpoint.pkl"
-        
+
         if not checkpoint_file.is_file():
             files_in_checkpoint = list(Path(checkpoint_dir).iterdir())
             raise FileNotFoundError(
@@ -101,58 +130,25 @@ def main():
 
     analysis = tune.ExperimentAnalysis(str(RESULTS_DIR.resolve()))
 
-    print("Finding the best trial...")
-    best_trial = get_best_trial_from_analysis(analysis)
+    print("Filtering and sorting trials by loss...")
 
-    trial_name = Path(best_trial.path).name
-    print(f"Best trial found: {trial_name}")
-    print(f"  - Loss: {best_trial.last_result.get('loss', 'N/A'):.4f}")
-    print(f"  - Latent Dim: {best_trial.config.get('latent_dim', 'N/A')}")
-    print(f"  - Beta: {best_trial.config.get('beta', 'N/A')}")
+    trials = analysis.trials
+    completed_trials = [t for t in trials if t.status == "TERMINATED" and t.checkpoint]
 
-    print("\nLoading model from checkpoint...")
-    model, patch_size = load_model_from_checkpoint(best_trial, DEVICE)
-    print(f"Model loaded successfully. Using patch size: {patch_size}")
+    if not completed_trials:
+        print("No completed trials with checkpoints found.")
+        return
 
-    print(f"\nLoading and preparing image patch from: {DATA_FILE}")
-    original_patch = get_image_patch(DATA_FILE, patch_size, DEVICE)
+    sorted_trials = sorted(
+        completed_trials, key=lambda t: t.last_result.get("loss", float("inf"))
+    )
 
-    # Create a 90-degree rotated version
-    rotated_patch = TF.rotate(original_patch, 90)
-    print("Original and 90-degree rotated patches created.")
+    top_n = 5
+    print(f"\n--- Analyzing Top {top_n} Trials ---")
 
-    print("\nPerforming inference to get latent vectors...")
-    with torch.no_grad():
-        _, _, _, mu_original, _ = model(original_patch)
-        _, _, _, mu_rotated, _ = model(rotated_patch)
-
-    print("Comparing latent vectors...")
-
-    # --- Quantitative Analysis ---
-    # Euclidean Distance
-    euclidean_dist = torch.norm(mu_original - mu_rotated, p=2).item()
-
-    # Cosine Similarity
-    cosine_sim = F.cosine_similarity(mu_original, mu_rotated).item()
-
-    print("\n--- Verification Results ---")
-    print(f"Euclidean Distance between latent vectors (mu): {euclidean_dist:.6f}")
-    print(f"Cosine Similarity between latent vectors (mu): {cosine_sim:.6f}")
-
-    print("\n--- Interpretation ---")
-    if cosine_sim > 0.99 and euclidean_dist < 0.1:
-        print("The model appears to be HIGHLY rotationally invariant.")
-        print(
-            "A high cosine similarity (>0.99) and low Euclidean distance (<0.1) are excellent indicators."
-        )
-    elif cosine_sim > 0.95 and euclidean_dist < 0.5:
-        print("The model appears to be LARGELY rotationally invariant.")
-        print("The latent vectors are very similar, but not identical.")
-    else:
-        print("The model's rotational invariance is LOW or BROKEN.")
-        print(
-            "The latent vectors for the original and rotated images are significantly different."
-        )
+    for i, trial in enumerate(sorted_trials[:top_n]):
+        print(f"\n--- Processing Trial #{i + 1}/{top_n} ---")
+        analyze_trial(trial, DEVICE)
 
 
 if __name__ == "__main__":
