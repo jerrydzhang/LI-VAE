@@ -317,8 +317,6 @@ def train_rvae_one_epoch(
     for x in data_loader:
         x = x.to(device)
 
-        # Assumed that the model returns
-        # rotated_recon, recon, rotated_recon_rotation, mu, logvar
         rotated_recon, canonical_recon, theta, mu, logvar = model(x)
 
         optimizer.zero_grad(set_to_none=True)
@@ -327,13 +325,12 @@ def train_rvae_one_epoch(
 
         if canonical_weight > 0 and canonical_recon is not None:
             canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
-            # Use mean reduction to avoid excessive scale
             canonical_loss = F.mse_loss(
                 canonical_recon, canonical_input, reduction="mean"
             )
             loss = loss + canonical_weight * canonical_loss
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
 
         total_norm = 0.0
         for p in model.parameters():
