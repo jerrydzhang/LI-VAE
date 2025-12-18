@@ -65,11 +65,13 @@ class RVAELoss(nn.Module):
         Returns:
             total_loss, recon_loss, kld_loss, cycle_loss
         """
-        # Reconstruction loss (mean over all pixels)
-        recon_loss = F.mse_loss(recon_x, x, reduction="mean")
+        batch_size = x.size(0)
+        
+        # Reconstruction loss: sum over spatial dims, mean over batch
+        # This keeps gradients in trainable range while normalizing by batch
+        recon_loss = F.mse_loss(recon_x, x, reduction="sum") / batch_size
 
-        # KL divergence (sum over latent dims, mean over batch)
-        # Use sum over latent dims to make it comparable to pixel-level reconstruction
+        # KL divergence: sum over latent dims, mean over batch
         kld_per_sample = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
         kld_loss = torch.mean(kld_per_sample)
 
