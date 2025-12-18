@@ -118,6 +118,9 @@ def train_rvae_tune(config: dict[str, Any]) -> None:
         - batch_size: Batch size
         - Other training hyperparameters
     """
+    import warnings
+    # Suppress deprecation warnings that Ray converts to fatal errors
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load data with hyperparameter-dependent batch size
@@ -225,8 +228,8 @@ def train_rvae_tune(config: dict[str, Any]) -> None:
             with open(checkpoint_path, "wb") as fp:
                 pickle.dump(checkpoint_data, fp)
             checkpoint = Checkpoint.from_directory(checkpoint_dir)
-            # Report to Ray Tune with checkpoint
-            train.report(metrics, checkpoint=checkpoint)
+            # Report to Ray Tune with checkpoint (use tune.report, not train.report)
+            tune.report(metrics, checkpoint=checkpoint)
 
         # Reset loggers
         train_logger.reset()
