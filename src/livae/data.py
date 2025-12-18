@@ -79,7 +79,7 @@ def default_transform(
     patch: torch.Tensor,
     flip_prob: float = 0.5,
     jitter_amount: int = 4,
-    rotation: bool = True,
+    rotation: bool = False,
 ) -> torch.Tensor:
     """Default set of transforms: random flip, rotation, jitter, and scale"""
     scale_factor = random.uniform(0.9, 1.1)
@@ -114,45 +114,6 @@ def default_transform(
         patch = torch.roll(patch, shifts=(shift_y, shift_x), dims=(-2, -1))
 
     return patch
-
-
-def paired_transform(
-    patch: torch.Tensor,
-    flip_prob: float = 0.5,
-    jitter_amount: int = 4,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Default set of transforms: random flip, rotation, jitter, and scale"""
-    scale_factor = random.uniform(0.9, 1.1)
-    patch = TF.affine(
-        patch,
-        angle=0.0,
-        translate=[0, 0],
-        scale=scale_factor,
-        shear=[0.0],
-        interpolation=TF.InterpolationMode.BILINEAR,
-    )
-
-    if random.random() < flip_prob:
-        patch = TF.hflip(patch)
-
-    if random.random() < flip_prob:
-        patch = TF.vflip(patch)
-
-    if jitter_amount > 0:
-        shift_x = random.randint(-jitter_amount, jitter_amount)
-        shift_y = random.randint(-jitter_amount, jitter_amount)
-        patch = torch.roll(patch, shifts=(shift_y, shift_x), dims=(-2, -1))
-
-    angle = random.uniform(0, 360)
-    rotated_patch = TF.rotate(
-        patch,
-        angle=angle,
-        interpolation=TF.InterpolationMode.BILINEAR,
-        expand=False,
-        fill=0,
-    )
-
-    return patch, rotated_patch
 
 
 def get_clean_peaks(img, min_distance=5, threshold_rel=0.01):
@@ -249,9 +210,14 @@ class PatchDataset(Dataset):
 
     def __getitem__(self, idx: int) -> torch.Tensor:
         img_idx = 0
-        while idx >= len(self.atom_coords[img_idx]):
+        while img_idx < len(self.atom_coords) and idx >= len(self.atom_coords[img_idx]):
             idx -= len(self.atom_coords[img_idx])
             img_idx += 1
+
+        if img_idx >= len(self.atom_coords):
+            raise IndexError(
+                f"Index {idx} out of range for dataset of size {len(self)}"
+            )
 
         cy, cx = self.atom_coords[img_idx][idx]
 
@@ -277,7 +243,7 @@ class PatchDataset(Dataset):
         patch_big = TF.center_crop(patch, [padded_size, padded_size])
 
         if self.transform:
-            patch_big = self.transform(patch_big)
+            patch_big = self.transform(patch_big, rotation=True)
 
         patch_final = TF.center_crop(patch_big, [self.patch_size, self.patch_size])
 
@@ -337,7 +303,7 @@ class AdaptiveLatticeDataset(Dataset):
         self,
         images: list[np.ndarray],
         patch_size: int,
-        padding: int = 32,
+        padding: int = 48,
         transform: TransformFn | None = default_transform,
         detection_threshold: float = 0.6,
     ):
@@ -515,9 +481,16 @@ class AdaptiveLatticeDataset(Dataset):
     def __getitem__(self, idx: int) -> torch.Tensor:
         """Get patch and label"""
         img_idx = 0
-        while idx >= len(self.sample_coords[img_idx]):
+        while img_idx < len(self.sample_coords) and idx >= len(
+            self.sample_coords[img_idx]
+        ):
             idx -= len(self.sample_coords[img_idx])
             img_idx += 1
+
+        if img_idx >= len(self.sample_coords):
+            raise IndexError(
+                f"Index {idx} out of range for dataset of size {len(self)}"
+            )
 
         cy, cx = self.sample_coords[img_idx][idx]
         img = self.images[img_idx]
@@ -654,9 +627,16 @@ class PairedAdaptiveLatticeDataset(AdaptiveLatticeDataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Get patch and label"""
         img_idx = 0
-        while idx >= len(self.sample_coords[img_idx]):
+        while img_idx < len(self.sample_coords) and idx >= len(
+            self.sample_coords[img_idx]
+        ):
             idx -= len(self.sample_coords[img_idx])
             img_idx += 1
+
+        if img_idx >= len(self.sample_coords):
+            raise IndexError(
+                f"Index {idx} out of range for dataset of size {len(self)}"
+            )
 
         cy, cx = self.sample_coords[img_idx][idx]
         img = self.images[img_idx]
@@ -710,20 +690,33 @@ class PairedAdaptiveLatticeDataset(AdaptiveLatticeDataset):
             interpolation=TF.InterpolationMode.BILINEAR,
         ).squeeze(0)
 
-        # First take a larger crop, apply transform (rotation), then crop back
+        # First take a larger crop with padding to allow rotation without artifacts
         padded_size = self.patch_size + 2 * self.padding
         patch_big = TF.center_crop(patch, [padded_size, padded_size])
 
+        # Apply non-rotation transforms (flip, jitter, scale) to the padded patch
         if self.transform:
-            patch, rotated_patch = self.transform(patch_big)
-        else:
-            rotated_patch = patch_big.clone()
+            patch_big = self.transform(patch_big, rotation=False)
 
-        patch_cropped = TF.center_crop(patch, [self.patch_size, self.patch_size])
-        rotated_patch_cropped = TF.center_crop(
-            rotated_patch, [self.patch_size, self.patch_size]
+        # Generate random rotation angle
+        angle = random.uniform(0, 360)
+
+        # Apply rotation to the padded patch (has room to rotate without clipping)
+        rotated_patch_big = TF.rotate(
+            patch_big,
+            angle=angle,
+            interpolation=TF.InterpolationMode.BILINEAR,
+            expand=False,
+            fill=0,
         )
 
+        # Now crop both patches to final size (removes rotation artifacts at edges)
+        patch_cropped = TF.center_crop(patch_big, [self.patch_size, self.patch_size])
+        rotated_patch_cropped = TF.center_crop(
+            rotated_patch_big, [self.patch_size, self.patch_size]
+        )
+
+        # Normalize each patch independently
         min_val = patch_cropped.min()
         max_val = patch_cropped.max()
         if max_val > min_val:
