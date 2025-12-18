@@ -306,6 +306,7 @@ def train_rvae_one_epoch(
     latent_std_sum = 0.0
     rotation_std_sum = 0.0
     grad_norm_sum = 0.0
+    cycle_loss_sum = 0.0
     use_amp = scaler is not None
     max_norm = grad_max_norm if grad_max_norm is not None else 20.0
 
