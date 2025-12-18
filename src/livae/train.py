@@ -30,6 +30,32 @@ __all__ = [
 ]
 
 
+def angles_from_theta(theta: torch.Tensor) -> torch.Tensor:
+    """Convert model theta output to angles in radians.
+
+    Supports either raw angles [B] or 2D unit vectors [B,2] = (cos, sin).
+    """
+    if theta is None:
+        return torch.empty(0, device="cpu")
+    if theta.dim() == 2 and theta.size(-1) == 2:
+        return torch.atan2(theta[:, 1], theta[:, 0])
+    return theta
+
+
+def circular_std(angles: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Circular standard deviation (radians) from angles tensor [B].
+
+    Uses std = sqrt(-2 ln R) with R the mean resultant length.
+    """
+    if angles.numel() == 0:
+        return torch.tensor(0.0, device=angles.device)
+    s = torch.sin(angles).mean()
+    c = torch.cos(angles).mean()
+    R = torch.sqrt(s * s + c * c)
+    R = torch.clamp(R, min=eps)
+    return torch.sqrt(torch.clamp(-2.0 * torch.log(R), max=1e6))
+
+
 def train_one_epoch(
     model: nn.Module,
     data_loader: DataLoader,
@@ -39,6 +65,8 @@ def train_one_epoch(
     device: torch.device,
     scaler: torch.amp.GradScaler | None = None,
     canonical_weight: float = 0.0,
+    grad_max_norm: float | None = None,
+    agc_lambda: float | None = None,
 ) -> None:
     """Generic training loop that works with both VAE and rVAE models.
 
@@ -55,9 +83,12 @@ def train_one_epoch(
     canonical_psnr_sum = 0.0
     canonical_ssim_sum = 0.0
     rotation_std_sum = 0.0
+    rotation_std_linear_sum = 0.0
     latent_mean_abs_sum = 0.0
     latent_std_sum = 0.0
     grad_norm_sum = 0.0
+    grad_norm_pre_sum = 0.0
+    grad_norm_post_sum = 0.0
     canonical_batches = 0
     n_batches = 0
 
@@ -106,19 +137,36 @@ def train_one_epoch(
 
         if use_amp:
             scaler.scale(loss).backward()
-            # Unscale and clip gradients for stability
+            # Unscale for accurate norm/clip
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
 
-        total_norm = 0.0
+        # Compute pre-clip norm (after unscale if AMP)
+        pre_norm_sq = 0.0
+        for p in model.parameters():
+            if p.grad is not None:
+                g = p.grad.detach()
+                pre_norm_sq += float(g.norm(2).item() ** 2)
+        pre_norm = pre_norm_sq ** 0.5
+
+        # Optional gradient clipping
+        # Apply adaptive gradient clipping (AGC) or standard clip
+        if agc_lambda is not None and agc_lambda > 0:
+            apply_agc(model.parameters(), agc_lambda)
+        elif grad_max_norm is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_max_norm)
+
+        # Compute post-clip norm
+        total_norm_sq = 0.0
         for p in model.parameters():
             if p.grad is not None:
                 param_norm = p.grad.detach().data.norm(2)
-                total_norm += param_norm.item() ** 2
-        total_norm = total_norm**0.5
+                total_norm_sq += param_norm.item() ** 2
+        total_norm = total_norm_sq ** 0.5
+
+        grad_norm_pre_sum += pre_norm
+        grad_norm_post_sum += total_norm
         grad_norm_sum += total_norm
 
         if use_amp:
@@ -138,7 +186,9 @@ def train_one_epoch(
             latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
 
             if theta is not None:
-                rotation_std_sum += torch.std(theta).item()
+                angles = angles_from_theta(theta)
+                rotation_std_sum += circular_std(angles).item()
+                rotation_std_linear_sum += torch.std(angles).item()
 
             if (
                 canonical_recon is not None
@@ -162,9 +212,12 @@ def train_one_epoch(
         "train_psnr": psnr_sum / n_batches,
         "train_ssim": ssim_sum / n_batches,
         "train_rotation_std": rotation_std_sum / n_batches,
+        "train_rotation_std_linear": rotation_std_linear_sum / n_batches,
         "train_latent_mean_abs": latent_mean_abs_sum / n_batches,
         "train_latent_std": latent_std_sum / n_batches,
         "train_grad_norm": grad_norm_sum / n_batches,
+        "train_grad_norm_pre": grad_norm_pre_sum / n_batches,
+        "train_grad_norm_post": grad_norm_post_sum / n_batches,
     }
 
     if canonical_batches > 0:
@@ -197,6 +250,7 @@ def evaluate(
     canonical_psnr_sum = 0.0
     canonical_ssim_sum = 0.0
     rotation_std_sum = 0.0
+    rotation_std_linear_sum = 0.0
     latent_mean_abs_sum = 0.0
     latent_std_sum = 0.0
     canonical_batches = 0
@@ -237,7 +291,7 @@ def evaluate(
                     x, theta, model.encoder.rotation_stn
                 )
                 canonical_loss = F.mse_loss(
-                    canonical_recon, canonical_input, reduction="sum"
+                    canonical_recon, canonical_input, reduction="mean"
                 )
                 loss = loss + canonical_weight * canonical_loss
 
@@ -251,7 +305,9 @@ def evaluate(
             latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
 
             if theta is not None:
-                rotation_std_sum += torch.std(theta).item()
+                angles = angles_from_theta(theta)
+                rotation_std_sum += circular_std(angles).item()
+                rotation_std_linear_sum += torch.std(angles).item()
 
             if (
                 canonical_recon is not None
@@ -275,6 +331,7 @@ def evaluate(
         "val_psnr": psnr_sum / n_batches,
         "val_ssim": ssim_sum / n_batches,
         "val_rotation_std": rotation_std_sum / n_batches,
+        "val_rotation_std_linear": rotation_std_linear_sum / n_batches,
         "val_latent_mean_abs": latent_mean_abs_sum / n_batches,
         "val_latent_std": latent_std_sum / n_batches,
     }
@@ -299,6 +356,8 @@ def train_rvae_one_epoch(
     metric_logger: MetricLogger,
     device: torch.device,
     canonical_weight: float = 0.2,
+    grad_max_norm: float | None = None,
+    agc_lambda: float | None = None,
 ) -> None:
     model.train()
     total_loss = 0.0
@@ -311,7 +370,10 @@ def train_rvae_one_epoch(
     latent_mean_abs_sum = 0.0
     latent_std_sum = 0.0
     rotation_std_sum = 0.0
+    rotation_std_linear_sum = 0.0
     grad_norm_sum = 0.0
+    grad_norm_pre_sum = 0.0
+    grad_norm_post_sum = 0.0
     n_batches = 0
 
     for x in data_loader:
@@ -330,14 +392,27 @@ def train_rvae_one_epoch(
             )
             loss = loss + canonical_weight * canonical_loss
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=20.0)
 
-        total_norm = 0.0
+        # Pre-clip norm
+        pre_norm_sq = 0.0
         for p in model.parameters():
             if p.grad is not None:
-                param_norm = p.grad.detach().data.norm(2)
-                total_norm += param_norm.item() ** 2
-        total_norm = total_norm**0.5
+                pre_norm_sq += float(p.grad.detach().data.norm(2).item() ** 2)
+        pre_norm = pre_norm_sq ** 0.5
+
+        if agc_lambda is not None and agc_lambda > 0:
+            apply_agc(model.parameters(), agc_lambda)
+        elif grad_max_norm is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_max_norm)
+
+        # Post-clip norm
+        total_norm_sq = 0.0
+        for p in model.parameters():
+            if p.grad is not None:
+                total_norm_sq += float(p.grad.detach().data.norm(2).item() ** 2)
+        total_norm = total_norm_sq ** 0.5
+        grad_norm_pre_sum += pre_norm
+        grad_norm_post_sum += total_norm
         grad_norm_sum += total_norm
 
         optimizer.step()
@@ -361,7 +436,9 @@ def train_rvae_one_epoch(
             latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
 
             if theta is not None:
-                rotation_std_sum += torch.std(theta).item()
+                angles = angles_from_theta(theta)
+                rotation_std_sum += circular_std(angles).item()
+                rotation_std_linear_sum += torch.std(angles).item()
 
         n_batches += 1
 
@@ -374,10 +451,49 @@ def train_rvae_one_epoch(
         train_latent_mean_abs=latent_mean_abs_sum / n_batches,
         train_latent_std=latent_std_sum / n_batches,
         train_rotation_std=rotation_std_sum / n_batches,
+        train_rotation_std_linear=rotation_std_linear_sum / n_batches,
         train_grad_norm=grad_norm_sum / n_batches,
+        train_grad_norm_pre=grad_norm_pre_sum / n_batches,
+        train_grad_norm_post=grad_norm_post_sum / n_batches,
         train_canonical_psnr=canonical_psnr_sum / n_batches,
         train_canonical_ssim=canonical_ssim_sum / n_batches,
     )
+
+
+def apply_agc(
+    parameters: Iterable[torch.nn.Parameter],
+    clipping: float = 0.01,
+    eps: float = 1e-3,
+    skip_1d: bool = True,
+) -> None:
+    """Adaptive Gradient Clipping (AGC).
+
+    Scales gradients when ||g|| > clipping * ||p||, with optional skip of 1D params
+    (biases, norms). See Brock et al., 2021.
+
+    Parameters
+    ----------
+    parameters : Iterable[nn.Parameter]
+        Model parameters
+    clipping : float
+        Clipping factor (lambda). Typical values in [0.01, 0.1].
+    eps : float
+        Numerical stability epsilon
+    skip_1d : bool
+        Skip parameters with <=1 dimension (bias, LayerNorm/BatchNorm weights)
+    """
+    for p in parameters:
+        if p.grad is None:
+            continue
+        if skip_1d and p.ndim <= 1:
+            continue
+
+        param_norm = p.detach().norm(2)
+        grad_norm = p.grad.detach().norm(2)
+
+        if param_norm > eps and grad_norm > clipping * param_norm:
+            scale = (clipping * param_norm / (grad_norm + eps)).to(p.grad.dtype)
+            p.grad.detach().mul_(scale)
 
 
 def evaluate_rvae(

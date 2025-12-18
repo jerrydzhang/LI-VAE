@@ -187,6 +187,7 @@ def run_training(args: argparse.Namespace) -> None:
             device,
             scaler=scaler,
             canonical_weight=args.canonical_weight,
+            grad_max_norm=args.grad_max_norm,
         )
 
         evaluate(
@@ -353,6 +354,12 @@ def build_argparser() -> argparse.ArgumentParser:
         type=float,
         default=0.2,
         help="Weight for canonical-frame consistency loss (0 to disable)",
+    )
+    parser.add_argument(
+        "--grad-max-norm",
+        type=float,
+        default=None,
+        help="Max gradient norm for clipping; set to a float to enable (None to disable)",
     )
 
     parser.add_argument(
