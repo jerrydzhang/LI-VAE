@@ -19,15 +19,13 @@ class VAELoss(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute VAE loss.
         
-        Uses mean reduction normalized by batch size for proper scaling.
+        Uses mean reduction for proper per-element scaling.
         """
-        batch_size = x.size(0)
+        # Reconstruction loss (mean over all elements)
+        recon_loss = F.mse_loss(recon_x, x, reduction="mean")
         
-        # Reconstruction loss (mean per batch)
-        recon_loss = F.mse_loss(recon_x, x, reduction="sum") / batch_size
-        
-        # KL divergence (mean per batch)
-        kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / batch_size
+        # KL divergence (mean over batch and latent dims)
+        kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
         
         total_loss = recon_loss + self.beta * kld_loss
         return total_loss, recon_loss, kld_loss
@@ -55,7 +53,7 @@ class RVAELoss(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute RVAE loss.
         
-        Uses mean reduction normalized by batch size for proper scaling.
+        Uses mean reduction for proper per-element scaling.
         
         Args:
             recon_x: Reconstructed images [B, C, H, W]
@@ -67,17 +65,21 @@ class RVAELoss(nn.Module):
         Returns:
             total_loss, recon_loss, kld_loss, cycle_loss
         """
-        batch_size = x.size(0)
+        # Reconstruction loss (mean over all elements)
+        recon_loss = F.mse_loss(recon_x, x, reduction="mean")
         
-        # Reconstruction loss (mean per batch)
-        recon_loss = F.mse_loss(recon_x, x, reduction="sum") / batch_size
-        
-        # KL divergence (mean per batch)
-        kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / batch_size
+        # KL divergence (mean over batch and latent dims)
+        kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
-        # Cycle consistency loss (mean per batch) - only if mu_rotated provided
+        # Cycle consistency loss (mean over all elements) - only if mu_rotated provided
         if mu_rotated is not None and self.gamma > 0:
-            cycle_loss = F.mse_loss(mu, mu_rotated, reduction="sum") / batch_size
+            cycle_loss = F.mse_loss(mu, mu_rotated, reduction="mean")
+        else:
+            cycle_loss = torch.tensor(0.0, device=recon_x.device)
+        
+        total_loss = recon_loss + self.beta * kld_loss + self.gamma * cycle_loss
+        
+        return total_loss, recon_loss, kld_loss, cycle_loss
         else:
             cycle_loss = torch.tensor(0.0, device=recon_x.device)
         

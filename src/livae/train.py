@@ -307,6 +307,7 @@ def train_rvae_one_epoch(
     rotation_std_sum = 0.0
     grad_norm_sum = 0.0
     cycle_loss_sum = 0.0
+    canonical_loss_sum = 0.0
     n_batches = 0
     use_amp = scaler is not None
     max_norm = grad_max_norm if grad_max_norm is not None else 20.0
@@ -342,14 +343,17 @@ def train_rvae_one_epoch(
                 loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
                     rotated_recon, x, mu, logvar, mu_rotated
                 )
+                
+                # Track canonical loss separately
+                batch_canonical_loss = torch.tensor(0.0, device=loss.device)
                 if canonical_weight > 0 and canonical_recon is not None:
                     canonical_input = rotate_to_canonical(
                         x, theta, model.encoder.rotation_stn
                     )
-                    canonical_loss = F.mse_loss(
+                    batch_canonical_loss = F.mse_loss(
                         canonical_recon, canonical_input, reduction="mean"
                     )
-                    loss = loss + canonical_weight * canonical_loss
+                    loss = loss + canonical_weight * batch_canonical_loss
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
@@ -367,12 +371,15 @@ def train_rvae_one_epoch(
             loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
                 rotated_recon, x, mu, logvar, mu_rotated
             )
+            
+            # Track canonical loss separately
+            batch_canonical_loss = torch.tensor(0.0, device=loss.device)
             if canonical_weight > 0 and canonical_recon is not None:
                 canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
-                canonical_loss = F.mse_loss(
+                batch_canonical_loss = F.mse_loss(
                     canonical_recon, canonical_input, reduction="mean"
                 )
-                loss = loss + canonical_weight * canonical_loss
+                loss = loss + canonical_weight * batch_canonical_loss
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
             optimizer.step()
@@ -414,6 +421,7 @@ def train_rvae_one_epoch(
         train_recon_loss=recon_loss_sum / n_batches,
         train_kld_loss=kld_loss_sum / n_batches,
         train_cycle_loss=cycle_loss_sum / n_batches,
+        train_canonical_loss=canonical_loss_sum / n_batches,
         train_psnr=psnr_sum / n_batches,
         train_ssim=ssim_sum / n_batches,
         train_latent_mean_abs=latent_mean_abs_sum / n_batches,
@@ -438,6 +446,7 @@ def evaluate_rvae(
     recon_loss_sum = 0.0
     kld_loss_sum = 0.0
     cycle_loss_sum = 0.0
+    canonical_loss_sum = 0.0
     psnr_sum = 0.0
     ssim_sum = 0.0
     canonical_psnr_sum = 0.0
@@ -476,18 +485,20 @@ def evaluate_rvae(
                 rotated_recon, x, mu, logvar, mu_rotated
             )
 
-        if canonical_weight > 0 and canonical_recon is not None:
-            canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
-            canonical_loss = F.mse_loss(
-                canonical_recon, canonical_input, reduction="mean"
-            )
-
-            loss = loss + canonical_weight * canonical_loss
+            # Track canonical loss separately
+            batch_canonical_loss = torch.tensor(0.0, device=loss.device)
+            if canonical_weight > 0 and canonical_recon is not None:
+                canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
+                batch_canonical_loss = F.mse_loss(
+                    canonical_recon, canonical_input, reduction="mean"
+                )
+                loss = loss + canonical_weight * batch_canonical_loss
 
         total_loss += loss.item()
         recon_loss_sum += batch_recon_loss.item()
         kld_loss_sum += batch_kld_loss.item()
         cycle_loss_sum += batch_cycle_loss.item()
+        canonical_loss_sum += (canonical_weight * batch_canonical_loss.item())
 
         psnr_sum += compute_psnr(rotated_recon, x)
         ssim_sum += compute_ssim(rotated_recon, x)
@@ -510,6 +521,7 @@ def evaluate_rvae(
         val_recon_loss=recon_loss_sum / n_batches,
         val_kld_loss=kld_loss_sum / n_batches,
         val_cycle_loss=cycle_loss_sum / n_batches,
+        val_canonical_loss=canonical_loss_sum / n_batches,
         val_psnr=psnr_sum / n_batches,
         val_ssim=ssim_sum / n_batches,
         val_latent_mean_abs=latent_mean_abs_sum / n_batches,
