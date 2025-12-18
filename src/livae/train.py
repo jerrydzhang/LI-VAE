@@ -502,9 +502,11 @@ def rotate_to_canonical(
 ) -> torch.Tensor:
     """Rotate a batch of images to the canonical frame using predicted angles."""
 
-    rot_matrix = rotation_stn.get_rotation_matrix(theta)
+    rot_matrix = rotation_stn.get_rotation_matrix(theta).to(x.dtype)
     grid = F.affine_grid(rot_matrix, x.size(), align_corners=False)
-    return F.grid_sample(x, grid, padding_mode="reflection", align_corners=False)
+    return F.grid_sample(
+        x, grid, padding_mode="reflection", align_corners=False
+    )
 
 
 def evaluate_rotation_invariance(
