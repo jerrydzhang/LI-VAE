@@ -24,11 +24,11 @@ class VAELoss(nn.Module):
         
         Uses mean reduction for reconstruction loss and KL divergence.
         """
-        # Reconstruction loss (mean reduction to avoid FP16 overflow)
-        recon_loss = F.mse_loss(recon_x, x, reduction="mean")
+        # Reconstruction loss (summed over all elements in the batch)
+        recon_loss = F.mse_loss(recon_x, x, reduction="sum")
         
-        # KL divergence, summed over latent dimensions, then averaged over the batch
-        kld_loss = -0.5 * torch.mean(torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1))
+        # KL divergence (summed over all elements in the batch)
+        kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         
         total_loss = recon_loss + self.beta * kld_loss
         
