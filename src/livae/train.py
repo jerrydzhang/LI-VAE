@@ -108,16 +108,16 @@ def train_one_epoch(
                 _, recon_loss_canonical, _ = criterion(
                     canonical_recon, canonical_input.detach(), mu, logvar
                 )
-                
-                loss = loss_rotated + recon_loss_canonical  # Add canonical recon loss, avoid double-counting KLD
+
+                loss = (
+                    loss_rotated + recon_loss_canonical
+                )  # Add canonical recon loss, avoid double-counting KLD
                 batch_recon_loss = recon_loss_rotated + recon_loss_canonical
                 batch_kld_loss = kld_loss
             else:
                 # VAE: (recon, mu, logvar)
                 recon, mu, logvar = outputs
-                loss, batch_recon_loss, batch_kld_loss = criterion(
-                    recon, x, mu, logvar
-                )
+                loss, batch_recon_loss, batch_kld_loss = criterion(recon, x, mu, logvar)
 
         if use_amp:
             scaler.scale(loss).backward()
@@ -221,7 +221,7 @@ def evaluate(
                     rotated_recon, x, mu, logvar
                 )
                 _, recon_loss_canonical, _ = criterion(
-                    canonical_recon, canonical_input, mu, logvar
+                    canonical_recon, canonical_input.detach(), mu, logvar
                 )
 
                 loss = loss_rotated + recon_loss_canonical
@@ -229,9 +229,7 @@ def evaluate(
                 batch_kld_loss = kld_loss
             else:
                 recon, mu, logvar = outputs
-                loss, batch_recon_loss, batch_kld_loss = criterion(
-                    recon, x, mu, logvar
-                )
+                loss, batch_recon_loss, batch_kld_loss = criterion(recon, x, mu, logvar)
 
             # --- Metric Accumulation ---
             total_loss_sum += loss.item()

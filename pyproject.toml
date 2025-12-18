@@ -16,6 +16,7 @@ dependencies = [
     "ipywidgets>=8.1.8",
     "matplotlib>=3.10.8",
     "pywavelets>=1.9.0",
+    "ray[tune]>=2.52.1",
     "scikit-image>=0.25.2",
     "scipy>=1.16.3",
     "tensorboard>=2.16.2",
