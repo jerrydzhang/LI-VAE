@@ -358,8 +358,6 @@ def train_rvae_one_epoch(
         total_norm = total_norm**0.5
         grad_norm_sum += total_norm
 
-        optimizer.step()
-
         total_loss += loss.item()
         recon_loss_sum += batch_recon_loss.item()
         kld_loss_sum += batch_kld_loss.item()
