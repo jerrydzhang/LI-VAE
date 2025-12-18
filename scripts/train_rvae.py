@@ -150,7 +150,6 @@ def run_training(args: argparse.Namespace) -> None:
 
     criterion = VAELoss(
         beta=0.0 if args.beta_annealing else args.beta,
-        beta_recon_min=args.beta_recon_min,
     )
 
     scaler = (
@@ -343,12 +342,7 @@ def build_argparser() -> argparse.ArgumentParser:
         default=1.0,
         help="Beta coefficient for KL divergence (higher = stronger KL penalty, but risk of latent collapse with mean reduction)",
     )
-    parser.add_argument(
-        "--beta-recon-min",
-        type=float,
-        default=0.9,
-        help="Minimum weight for reconstruction loss (0–1) to prevent latent collapse. Default 0.9 ensures recon has 90%% weight at start.",
-    )
+
     parser.add_argument(
         "--beta-annealing",
         action="store_true",
