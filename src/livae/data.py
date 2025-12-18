@@ -10,6 +10,7 @@ import torchvision.transforms.functional as TF
 from scipy.spatial import KDTree
 from skimage.feature import peak_local_max
 from torch.utils.data import Dataset
+from tqdm import tqdm
 
 from .filter import bandpass_filter, normalize_image
 from .utils import estimate_lattice_constant
@@ -300,6 +301,7 @@ class AdaptiveLatticeDataset(Dataset):
         padding: int = 32,
         transform: TransformFn | None = default_transform,
         detection_threshold: float = 0.6,
+        device: str | torch.device | None = None,
     ):
         """Dataset with adaptive lattice sampling.
 
@@ -316,11 +318,16 @@ class AdaptiveLatticeDataset(Dataset):
         detection_threshold : float, optional
             Distance threshold (as fraction of lattice spacing) for matching
             predicted lattice sites to detected atoms. Default is 0.6.
+        device : str | torch.device | None, optional
+            Device to cache extracted patches on ('cuda', 'cpu', or torch.device).
+            If None, patches are kept on CPU. Default is None.
         """
         self.patch_size = patch_size
         self.padding = padding
         self.transform = transform
         self.detection_threshold = detection_threshold
+        self.device = torch.device(device) if device is not None else None
+        self.patch_cache = []  # Will store GPU tensors if device is set
 
         def preprocess_image(img: np.ndarray) -> np.ndarray:
             img = bandpass_filter(img, 20, 100)
@@ -469,11 +476,27 @@ class AdaptiveLatticeDataset(Dataset):
             self.sample_coords.append(all_coords)
             self.labels.append(all_labels)
 
-    def __len__(self) -> int:
-        return sum(len(coords) for coords in self.sample_coords)
+    def cache_to_device(self) -> None:
+        """Pre-extract and cache all patches to the specified device (CPU or GPU).
+        
+        This is useful when your dataset is small enough to fit entirely in GPU memory,
+        avoiding repeated patch extraction from raw images during training.
+        """
+        if self.device is None:
+            print("No device specified for caching. Skipping cache_to_device().")
+            return
 
-    def __getitem__(self, idx: int) -> torch.Tensor:
-        """Get patch and label"""
+        print(f"Caching {len(self)} patches to {self.device}...")
+        self.patch_cache = []
+        
+        for idx in tqdm(range(len(self)), desc="Caching patches"):
+            patch = self._extract_patch(idx)
+            self.patch_cache.append(patch.to(self.device))
+
+        print(f"Cached {len(self.patch_cache)} patches on {self.device}")
+
+    def _extract_patch(self, idx: int) -> torch.Tensor:
+        """Extract a single patch without device transfer (internal method)."""
         img_idx = 0
         while idx >= len(self.sample_coords[img_idx]):
             idx -= len(self.sample_coords[img_idx])
@@ -531,7 +554,26 @@ class AdaptiveLatticeDataset(Dataset):
             interpolation=TF.InterpolationMode.BILINEAR,
         ).squeeze(0)
 
-        # First take a larger crop, apply transform (rotation), then crop back
+        padded_size = self.patch_size + 2 * self.padding
+        patch_big = TF.center_crop(patch, [padded_size, padded_size])
+
+        if self.transform:
+            patch_big = self.transform(patch_big)
+
+        patch_final = TF.center_crop(patch_big, [self.patch_size, self.patch_size])
+        return patch_final
+
+    def __len__(self) -> int:
+        return sum(len(coords) for coords in self.sample_coords)
+
+    def __getitem__(self, idx: int) -> torch.Tensor:
+        """Get patch and label"""
+        # Return cached patch if available
+        if len(self.patch_cache) > 0:
+            return self.patch_cache[idx]
+        
+        # Otherwise extract on-the-fly
+        return self._extract_patch(idx)
         padded_size = self.patch_size + 2 * self.padding
         patch_big = TF.center_crop(patch, [padded_size, padded_size])
 

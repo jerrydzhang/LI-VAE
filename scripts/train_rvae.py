@@ -33,6 +33,8 @@ def make_dataloaders(
     prefetch_factor: int = 1,
     val_split: float = 0.1,
     dataset_name: str | None = None,
+    device: torch.device | None = None,
+    cache_to_gpu: bool = False,
 ) -> tuple[DataLoader, DataLoader]:
     """Create training and validation dataloaders from H5 files.
 
@@ -54,6 +56,11 @@ def make_dataloaders(
         Validation split fraction (default: 0.1)
     dataset_name : str | None
         Dataset path inside H5 file
+    device : torch.device | None
+        Device to cache patches on (only used if cache_to_gpu=True)
+    cache_to_gpu : bool
+        If True, pre-extract and cache all patches to device. Requires device to be set.
+        Default is False.
 
     Returns
     -------
@@ -65,8 +72,15 @@ def make_dataloaders(
     print(f"Loading data from: {h5_paths}")
     images = [load_image_from_h5(p, dataset_name=dataset_name) for p in h5_paths]  # type: ignore
     dataset = AdaptiveLatticeDataset(
-        images, patch_size=patch_size, padding=padding, transform=default_transform
+        images, 
+        patch_size=patch_size, 
+        padding=padding, 
+        transform=default_transform,
+        device=device if cache_to_gpu else None,
     )
+
+    if cache_to_gpu and device is not None:
+        dataset.cache_to_device()
 
     val_len = max(1, int(len(dataset) * val_split))
     train_len = max(1, len(dataset) - val_len)
@@ -74,24 +88,28 @@ def make_dataloaders(
 
     print(f"Dataset size: {len(dataset)} patches ({train_len} train, {val_len} val)")
 
+    # When caching to GPU, use num_workers=0 since we don't need data loading
+    num_workers_actual = 0 if cache_to_gpu else num_workers
+    prefetch_factor_actual = prefetch_factor if num_workers_actual > 0 else None
+
     train_loader = DataLoader(
         train_ds,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=prefetch_factor if num_workers > 0 else None,
+        num_workers=num_workers_actual,
+        pin_memory=True if num_workers_actual > 0 else False,
+        persistent_workers=True if num_workers_actual > 0 else False,
+        prefetch_factor=prefetch_factor_actual,
         drop_last=True,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=prefetch_factor if num_workers > 0 else None,
+        num_workers=num_workers_actual,
+        pin_memory=True if num_workers_actual > 0 else False,
+        persistent_workers=True if num_workers_actual > 0 else False,
+        prefetch_factor=prefetch_factor_actual,
     )
     return train_loader, val_loader
 
@@ -124,6 +142,8 @@ def run_training(args: argparse.Namespace) -> None:
         prefetch_factor=args.prefetch_factor,
         val_split=args.val_split,
         dataset_name=args.dataset_name,
+        device=device,
+        cache_to_gpu=args.cache_to_gpu,
     )
 
     model = RVAE(
@@ -370,6 +390,11 @@ def build_argparser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--cpu", action="store_true", help="Force CPU even if CUDA is available"
+    )
+    parser.add_argument(
+        "--cache-to-gpu",
+        action="store_true",
+        help="Pre-extract and cache all patches to GPU (useful for small datasets). Requires CUDA. Default is False.",
     )
     parser.add_argument(
         "--compile",
