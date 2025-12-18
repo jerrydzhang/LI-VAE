@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from livae.data import PairedAdaptiveLatticeDataset, paired_transform
+from livae.data import PairedAdaptiveLatticeDataset
 from livae.loss import RVAELoss
 from livae.model import RVAE
 from livae.train import (
@@ -65,7 +65,7 @@ def make_dataloaders(
     print(f"Loading data from: {h5_paths}")
     images = [load_image_from_h5(p, dataset_name=dataset_name) for p in h5_paths]  # type: ignore
     dataset = PairedAdaptiveLatticeDataset(
-        images, patch_size=patch_size, padding=padding, transform=paired_transform
+        images, patch_size=patch_size, padding=padding
     )
 
     val_len = max(1, int(len(dataset) * val_split))

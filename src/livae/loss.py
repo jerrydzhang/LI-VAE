@@ -4,12 +4,9 @@ import torch.nn.functional as F
 
 
 class VAELoss(nn.Module):
+    """VAE loss with configurable beta, using mean reductions for stable scaling."""
+
     def __init__(self, beta: float = 1.0) -> None:
-        """Standard VAE loss with beta parameter for KL divergence weight.
-        
-        Args:
-            beta: KL divergence weight (0 to fully disable).
-        """
         super().__init__()
         self.beta = beta
 
@@ -20,30 +17,23 @@ class VAELoss(nn.Module):
         mu: torch.Tensor,
         logvar: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Compute VAE loss.
-        
-        Uses mean reduction for reconstruction loss and KL divergence.
-        """
-        # Reconstruction loss (summed over all elements in the batch)
-        recon_loss = F.mse_loss(recon_x, x, reduction="sum")
-        
-        # KL divergence (summed over all elements in the batch)
-        kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        
+        # Mean MSE per pixel
+        recon_loss = F.mse_loss(recon_x, x, reduction="mean")
+        # KL scaled as mean over batch
+        kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+
         total_loss = recon_loss + self.beta * kld_loss
-        
         return total_loss, recon_loss, kld_loss
 
 
 class RVAELoss(nn.Module):
-    def __init__(self, beta: float = 1.0, gamma: float = 1.0) -> None:
-        """RVAE loss with beta parameter for KL divergence weight 
-        and gamma for cycle consistency.
-        
-        Args:
-            beta: KL divergence weight (0 to fully disable).
-            gamma: Cycle consistency weight (0 to fully disable).
-        """
+    """rVAE loss with beta (KL) and gamma (cycle) weights.
+
+    Cycle loss is optional; when absent it is treated as zero.
+    All losses use mean reduction to keep magnitudes comparable.
+    """
+
+    def __init__(self, beta: float = 1.0, gamma: float = 0.0) -> None:
         super().__init__()
         self.beta = beta
         self.gamma = gamma
@@ -54,22 +44,11 @@ class RVAELoss(nn.Module):
         x: torch.Tensor,
         mu: torch.Tensor,
         logvar: torch.Tensor,
-        mu_rotated: torch.Tensor,
-
+        cycle_loss: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Compute RVAE loss.
-        
-        Uses mean reduction for reconstruction loss and KL divergence.
-        """
-        # Reconstruction loss (summed over all elements in the batch)
-        recon_loss = F.mse_loss(recon_x, x, reduction="sum")
-        
-        # KL divergence (summed over all elements in the batch)
-        kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        recon_loss = F.mse_loss(recon_x, x, reduction="mean")
+        kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        cyc = cycle_loss if cycle_loss is not None else torch.tensor(0.0, device=recon_x.device, dtype=recon_x.dtype)
 
-        # Cycle consistency loss
-        cycle_loss = F.mse_loss(mu, mu_rotated, reduction="sum")
-        
-        total_loss = recon_loss + self.beta * kld_loss + self.gamma * cycle_loss
-        
-        return total_loss, recon_loss, kld_loss, cycle_loss
+        total_loss = recon_loss + self.beta * kld_loss + self.gamma * cyc
+        return total_loss, recon_loss, kld_loss, cyc
