@@ -147,7 +147,6 @@ def run_training(args: argparse.Namespace) -> None:
 
     criterion = VAELoss(
         beta=0.0 if args.beta_annealing else args.beta,
-        free_bits_lambda=args.free_bits,
     )
 
     scaler = (
@@ -336,12 +335,6 @@ def build_argparser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Number of epochs for beta warmup from 0 to beta (default: 10); increase to 20-30 for gentler warmup",
-    )
-    parser.add_argument(
-        "--free-bits",
-        type=float,
-        default=0.0,
-        help="Free bits budget (lambda) for KL divergence. If > 0, KL loss is only incurred above this value. Helps prevent posterior collapse. (default: 0.0)",
     )
 
     parser.add_argument(
