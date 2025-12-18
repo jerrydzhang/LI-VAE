@@ -168,12 +168,8 @@ def train_one_epoch(
     }
 
     if canonical_batches > 0:
-        metrics["train_canonical_psnr"] = (
-            canonical_psnr_sum / canonical_batches
-        )
-        metrics["train_canonical_ssim"] = (
-            canonical_ssim_sum / canonical_batches
-        )
+        metrics["train_canonical_psnr"] = canonical_psnr_sum / canonical_batches
+        metrics["train_canonical_ssim"] = canonical_ssim_sum / canonical_batches
 
     metric_logger.update(**metrics)
 
@@ -332,7 +328,9 @@ def train_rvae_one_epoch(
         if canonical_weight > 0 and canonical_recon is not None:
             canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
             # Use mean reduction to avoid excessive scale
-            canonical_loss = F.mse_loss(canonical_recon, canonical_input, reduction="mean")
+            canonical_loss = F.mse_loss(
+                canonical_recon, canonical_input, reduction="mean"
+            )
             loss = loss + canonical_weight * canonical_loss
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
@@ -405,45 +403,40 @@ def evaluate_rvae(
     latent_std_sum = 0.0
     rotation_std_sum = 0.0
     n_batches = 0
-                canonical_loss = F.mse_loss(
-                    canonical_recon, canonical_input, reduction="mean"
-                )
-            x = x.to(device)
+    for x in data_loader:
+        # Assumed that the model returns
+        # rotated_recon, recon, rotated_recon_rotation, mu, logvar
+        rotated_recon, canonical_recon, theta, mu, logvar = model(x)
 
-            # Assumed that the model returns
-            # rotated_recon, recon, rotated_recon_rotation, mu, logvar
-            rotated_recon, canonical_recon, theta, mu, logvar = model(x)
+        loss, batch_recon_loss, batch_kld_loss = criterion(rotated_recon, x, mu, logvar)
 
-            loss, batch_recon_loss, batch_kld_loss = criterion(
-                rotated_recon, x, mu, logvar
+        if canonical_weight > 0 and canonical_recon is not None:
+            canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
+            canonical_loss = F.mse_loss(
+                canonical_recon, canonical_input, reduction="mean"
             )
 
-            if canonical_weight > 0 and canonical_recon is not None:
-                canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
-                canonical_loss = F.mse_loss(canonical_recon, canonical_input, reduction="sum")
-                loss = loss + canonical_weight * canonical_loss
+            loss = loss + canonical_weight * canonical_loss
 
-            total_loss += loss.item()
-            recon_loss_sum += batch_recon_loss.item()
-            kld_loss_sum += batch_kld_loss.item()
+        total_loss += loss.item()
+        recon_loss_sum += batch_recon_loss.item()
+        kld_loss_sum += batch_kld_loss.item()
 
-            psnr_sum += compute_psnr(rotated_recon, x)
-            ssim_sum += compute_ssim(rotated_recon, x)
+        psnr_sum += compute_psnr(rotated_recon, x)
+        ssim_sum += compute_ssim(rotated_recon, x)
 
-            if canonical_recon is not None:
-                canonical_input = rotate_to_canonical(
-                    x, theta, model.encoder.rotation_stn
-                )
-                canonical_psnr_sum += compute_psnr(canonical_recon, canonical_input)
-                canonical_ssim_sum += compute_ssim(canonical_recon, canonical_input)
+        if canonical_recon is not None:
+            canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
+            canonical_psnr_sum += compute_psnr(canonical_recon, canonical_input)
+            canonical_ssim_sum += compute_ssim(canonical_recon, canonical_input)
 
-            latent_mean_abs_sum += torch.mean(torch.abs(mu)).item()
-            latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
+        latent_mean_abs_sum += torch.mean(torch.abs(mu)).item()
+        latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
 
-            if theta is not None:
-                rotation_std_sum += torch.std(theta).item()
+        if theta is not None:
+            rotation_std_sum += torch.std(theta).item()
 
-            n_batches += 1
+        n_batches += 1
 
     metric_logger.update(
         val_loss=total_loss / n_batches,
@@ -577,9 +570,7 @@ def rotate_to_canonical(
 
     rot_matrix = rotation_stn.get_rotation_matrix(theta).to(x.dtype)
     grid = F.affine_grid(rot_matrix, x.size(), align_corners=False)
-    return F.grid_sample(
-        x, grid, padding_mode="reflection", align_corners=False
-    )
+    return F.grid_sample(x, grid, padding_mode="reflection", align_corners=False)
 
 
 def evaluate_rotation_invariance(
