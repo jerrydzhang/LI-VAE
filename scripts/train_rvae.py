@@ -27,7 +27,7 @@ from livae.utils import load_image_from_h5
 def make_dataloaders(
     h5_paths: Sequence[str],
     patch_size: int = 128,
-    padding: int = 16,
+    padding: int = 32,
     batch_size: int = 512,
     num_workers: int = 2,
     prefetch_factor: int = 1,
