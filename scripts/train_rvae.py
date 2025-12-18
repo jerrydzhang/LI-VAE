@@ -265,6 +265,21 @@ def run_training(args: argparse.Namespace) -> None:
         train_logger.reset()
         val_logger.reset()
 
+    # Save final model as a failsafe
+    if args.checkpoint:
+        final_ckpt_path = Path(args.checkpoint).parent / f"{Path(args.checkpoint).stem}_final.pt"
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "epoch": args.epochs,
+                "val_loss": val_loss,
+                "args": vars(args),
+            },
+            final_ckpt_path,
+        )
+        print(f"\nFinal model saved to: {final_ckpt_path}")
+
     writer.close()
     print(f"\nTraining complete! Best validation loss: {best_val:.4f}")
     if args.checkpoint:
