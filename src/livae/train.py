@@ -105,9 +105,8 @@ def train_one_epoch(
                 loss_rotated, recon_loss_rotated, kld_loss = criterion(
                     rotated_recon, x, mu, logvar
                 )
-                #
                 _, recon_loss_canonical, _ = criterion(
-                    canonical_recon, canonical_input, mu, logvar
+                    canonical_recon, canonical_input.detach(), mu, logvar
                 )
                 
                 loss = loss_rotated + recon_loss_canonical  # Add canonical recon loss, avoid double-counting KLD
