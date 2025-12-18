@@ -40,12 +40,15 @@ def load_model_from_checkpoint(best_trial: Trial, device: str) -> RVAE:
 
     model = RVAE(latent_dim=latent_dim, patch_size=patch_size)
 
-    # Use the official API to get the checkpoint data as a dictionary
-    # This is safer and handles cross-device loading automatically when possible.
-    checkpoint_data = best_trial.checkpoint.to_dict()
+    if best_trial.checkpoint is None:
+        raise ValueError("No checkpoint found for the best trial.")
 
-    # The model state is stored under 'model_state_dict'
-    model_state_dict = checkpoint_data["model_state_dict"]
+    with best_trial.checkpoint.as_directory() as checkpoint_dir:
+        model_state_dict = torch.load(
+            Path(checkpoint_dir) / "model_state_dict.pt",
+            map_location=device,
+            weights_only=False,
+        )
 
     model.load_state_dict(model_state_dict)
     model.to(device)
