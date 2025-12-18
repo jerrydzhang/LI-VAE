@@ -98,6 +98,9 @@ def train_one_epoch(
             if is_rvae:
                 # RVAE: (rotated_recon, recon, theta, mu, logvar)
                 rotated_recon, canonical_recon, theta, mu, logvar = outputs
+                canonical_input = rotate_to_canonical(
+                    x, theta, model.encoder.rotation_stn
+                )
                 # Loss is on the final rotated representation
                 loss, batch_recon_loss, batch_kld_loss = criterion(
                     rotated_recon, x, mu, logvar
@@ -203,6 +206,9 @@ def evaluate(
 
             if is_rvae:
                 rotated_recon, canonical_recon, theta, mu, logvar = outputs
+                canonical_input = rotate_to_canonical(
+                    x, theta, model.encoder.rotation_stn
+                )
                 loss, batch_recon_loss, batch_kld_loss = criterion(
                     rotated_recon, x, mu, logvar
                 )
