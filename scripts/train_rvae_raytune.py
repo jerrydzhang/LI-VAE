@@ -239,28 +239,23 @@ def init_ray_safe(temp_dir: str | None = None) -> None:
     """
     # Check if Ray is already initialized
     if not ray.is_initialized():
-        try:
-            # Create a clean temp directory for Ray
-            if temp_dir is None:
-                # temp_dir = tempfile.mkdtemp(prefix="ray_")
-                temp_dir = "/tmp/ray_temp"
+        # Create a clean temp directory for Ray
+        if temp_dir is None:
+            # temp_dir = tempfile.mkdtemp(prefix="ray_")
+            temp_dir = "/tmp/ray_temp"
 
-            Path(temp_dir).mkdir(parents=True, exist_ok=True)
+        Path(temp_dir).mkdir(parents=True, exist_ok=True)
 
-            print(f"Initializing Ray cluster with temp directory: {temp_dir}")
-            ray.init(
-                _temp_dir=temp_dir,
-                _node_ip_address="127.0.0.1",
-                ignore_reinit_error=True,
-                logging_level="warning",
-                log_to_driver=False,
-                include_dashboard=False,
-                object_store_memory=int(100e6),
-            )
-            print("Ray cluster initialized successfully.")
-        except Exception as e:
-            print(f"Warning: Ray initialization had issues: {e}")
-            print("Attempting to continue anyway...")
+        print(f"Initializing Ray cluster with temp directory: {temp_dir}")
+        ray.init(
+            _temp_dir=temp_dir,
+            ignore_reinit_error=True,
+            logging_level="warning",
+            log_to_driver=False,
+            include_dashboard=False,
+            object_store_memory=int(100e6),
+        )
+        print("Ray cluster initialized successfully.")
 
 
 def cleanup_ray() -> None:
