@@ -6,6 +6,7 @@ from typing import Any, Iterable
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from torchvision.utils import make_grid
@@ -50,14 +51,21 @@ def train_one_epoch(
     kld_loss_sum = 0.0
     psnr_sum = 0.0
     ssim_sum = 0.0
+    canonical_psnr_sum = 0.0
+    canonical_ssim_sum = 0.0
+    rotation_std_sum = 0.0
     latent_mean_abs_sum = 0.0
     latent_std_sum = 0.0
     grad_norm_sum = 0.0
+    canonical_batches = 0
     n_batches = 0
 
     use_amp = scaler is not None
 
     for x in tqdm(data_loader, desc="Training", leave=False):
+        if isinstance(x, (list, tuple)):
+            x = x[0]
+
         x = x.to(device, non_blocking=True)
 
         optimizer.zero_grad(set_to_none=True)
@@ -66,15 +74,18 @@ def train_one_epoch(
             outputs = model(x)
             if len(outputs) == 3:
                 # VAE: (recon, mu, logvar)
-                recon, mu, logvar = outputs
+                rotated_recon, mu, logvar = outputs
+                canonical_recon = None
                 theta = None
             elif len(outputs) == 5:
                 # rVAE: (rotated_recon, recon, theta, mu, logvar)
-                recon, _, theta, mu, logvar = outputs
+                rotated_recon, canonical_recon, theta, mu, logvar = outputs
             else:
                 raise ValueError(f"Unexpected model output length: {len(outputs)}")
 
-            loss, batch_recon_loss, batch_kld_loss = criterion(recon, x, mu, logvar)
+            loss, batch_recon_loss, batch_kld_loss = criterion(
+                rotated_recon, x, mu, logvar
+            )
 
         if use_amp:
             scaler.scale(loss).backward()
@@ -100,10 +111,26 @@ def train_one_epoch(
         kld_loss_sum += batch_kld_loss.item()
 
         with torch.no_grad():
-            psnr_sum += compute_psnr(recon, x)
-            ssim_sum += compute_ssim(recon, x)
+            psnr_sum += compute_psnr(rotated_recon, x)
+            ssim_sum += compute_ssim(rotated_recon, x)
             latent_mean_abs_sum += torch.mean(torch.abs(mu)).item()
             latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
+
+            if theta is not None:
+                rotation_std_sum += torch.std(theta).item()
+
+            if (
+                canonical_recon is not None
+                and theta is not None
+                and hasattr(model, "encoder")
+                and hasattr(model.encoder, "rotation_stn")
+            ):
+                canonical_input = rotate_to_canonical(
+                    x, theta, model.encoder.rotation_stn
+                )
+                canonical_psnr_sum += compute_psnr(canonical_recon, canonical_input)
+                canonical_ssim_sum += compute_ssim(canonical_recon, canonical_input)
+                canonical_batches += 1
 
         n_batches += 1
 
@@ -113,10 +140,19 @@ def train_one_epoch(
         "train_kld_loss": kld_loss_sum / n_batches,
         "train_psnr": psnr_sum / n_batches,
         "train_ssim": ssim_sum / n_batches,
+        "train_rotation_std": rotation_std_sum / n_batches,
         "train_latent_mean_abs": latent_mean_abs_sum / n_batches,
         "train_latent_std": latent_std_sum / n_batches,
         "train_grad_norm": grad_norm_sum / n_batches,
     }
+
+    if canonical_batches > 0:
+        metrics["train_canonical_psnr"] = (
+            canonical_psnr_sum / canonical_batches
+        )
+        metrics["train_canonical_ssim"] = (
+            canonical_ssim_sum / canonical_batches
+        )
 
     metric_logger.update(**metrics)
 
@@ -140,36 +176,62 @@ def evaluate(
     kld_loss_sum = 0.0
     psnr_sum = 0.0
     ssim_sum = 0.0
+    canonical_psnr_sum = 0.0
+    canonical_ssim_sum = 0.0
+    rotation_std_sum = 0.0
     latent_mean_abs_sum = 0.0
     latent_std_sum = 0.0
+    canonical_batches = 0
     n_batches = 0
 
     with torch.no_grad():
         for x in data_loader:
+            if isinstance(x, (list, tuple)):
+                x = x[0]
+
             x = x.to(device)
 
             # Forward pass - handle both VAE and rVAE
             outputs = model(x)
             if len(outputs) == 3:
                 # VAE: (recon, mu, logvar)
-                recon, mu, logvar = outputs
+                rotated_recon, mu, logvar = outputs
+                canonical_recon = None
                 theta = None
             elif len(outputs) == 5:
                 # rVAE: (rotated_recon, recon, theta, mu, logvar)
-                recon, _, theta, mu, logvar = outputs
+                rotated_recon, canonical_recon, theta, mu, logvar = outputs
             else:
                 raise ValueError(f"Unexpected model output length: {len(outputs)}")
 
-            loss, batch_recon_loss, batch_kld_loss = criterion(recon, x, mu, logvar)
+            loss, batch_recon_loss, batch_kld_loss = criterion(
+                rotated_recon, x, mu, logvar
+            )
 
             total_loss += loss.item()
             recon_loss_sum += batch_recon_loss.item()
             kld_loss_sum += batch_kld_loss.item()
 
-            psnr_sum += compute_psnr(recon, x)
-            ssim_sum += compute_ssim(recon, x)
+            psnr_sum += compute_psnr(rotated_recon, x)
+            ssim_sum += compute_ssim(rotated_recon, x)
             latent_mean_abs_sum += torch.mean(torch.abs(mu)).item()
             latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
+
+            if theta is not None:
+                rotation_std_sum += torch.std(theta).item()
+
+            if (
+                canonical_recon is not None
+                and theta is not None
+                and hasattr(model, "encoder")
+                and hasattr(model.encoder, "rotation_stn")
+            ):
+                canonical_input = rotate_to_canonical(
+                    x, theta, model.encoder.rotation_stn
+                )
+                canonical_psnr_sum += compute_psnr(canonical_recon, canonical_input)
+                canonical_ssim_sum += compute_ssim(canonical_recon, canonical_input)
+                canonical_batches += 1
 
             n_batches += 1
 
@@ -179,9 +241,14 @@ def evaluate(
         "val_kld_loss": kld_loss_sum / n_batches,
         "val_psnr": psnr_sum / n_batches,
         "val_ssim": ssim_sum / n_batches,
+        "val_rotation_std": rotation_std_sum / n_batches,
         "val_latent_mean_abs": latent_mean_abs_sum / n_batches,
         "val_latent_std": latent_std_sum / n_batches,
     }
+
+    if canonical_batches > 0:
+        metrics["val_canonical_psnr"] = canonical_psnr_sum / canonical_batches
+        metrics["val_canonical_ssim"] = canonical_ssim_sum / canonical_batches
 
     metric_logger.update(**metrics)
 
@@ -430,6 +497,16 @@ def compute_ssim(
     return ssim_map.mean().item()
 
 
+def rotate_to_canonical(
+    x: torch.Tensor, theta: torch.Tensor, rotation_stn: nn.Module
+) -> torch.Tensor:
+    """Rotate a batch of images to the canonical frame using predicted angles."""
+
+    rot_matrix = rotation_stn.get_rotation_matrix(theta)
+    grid = F.affine_grid(rot_matrix, x.size(), align_corners=False)
+    return F.grid_sample(x, grid, padding_mode="reflection", align_corners=False)
+
+
 def evaluate_rotation_invariance(
     model: nn.Module,
     images: torch.Tensor,
@@ -553,17 +630,21 @@ def log_reconstructions_tensorboard(
 ) -> None:
     """Log original, reconstructed, and error maps to TensorBoard.
 
-    Layout per sample: [original | rotated_recon | abs_diff]
+    Layout per sample: [original | rotated_recon | abs_diff]. For rVAE, also logs
+    canonical frame comparison if the rotation STN is available.
     """
     model.eval()
     with torch.no_grad():
-        outputs = model(images.to(device))
+        images_device = images.to(device)
+        outputs = model(images_device)
         if len(outputs) == 3:
             # VAE: (recon, mu, logvar)
             rotated_recon, _, _ = outputs
+            canonical_recon = None
+            theta = None
         elif len(outputs) == 5:
             # rVAE: (rotated_recon, recon, theta, mu, logvar)
-            rotated_recon, _, _, _, _ = outputs
+            rotated_recon, canonical_recon, theta, _, _ = outputs
         else:
             raise ValueError(f"Unexpected model output length: {len(outputs)}")
 
@@ -575,6 +656,31 @@ def log_reconstructions_tensorboard(
         triplets = torch.cat([images_cpu, rotated_recon_cpu, diff], dim=0)
         grid = make_grid(triplets, nrow=nrow or images_cpu.size(0), normalize=normalize)
         writer.add_image(f"{tag}/original_recon_diff", grid, global_step)
+
+        if (
+            canonical_recon is not None
+            and theta is not None
+            and hasattr(model, "encoder")
+            and hasattr(model.encoder, "rotation_stn")
+        ):
+            canonical_input = rotate_to_canonical(
+                images_device, theta, model.encoder.rotation_stn
+            )
+            canonical_input_cpu = canonical_input.detach().cpu()
+            canonical_recon_cpu = canonical_recon.detach().cpu()
+            canonical_diff = torch.abs(canonical_input_cpu - canonical_recon_cpu)
+
+            canonical_triplets = torch.cat(
+                [canonical_input_cpu, canonical_recon_cpu, canonical_diff], dim=0
+            )
+            canonical_grid = make_grid(
+                canonical_triplets,
+                nrow=nrow or images_cpu.size(0),
+                normalize=normalize,
+            )
+            writer.add_image(
+                f"{tag}/canonical_original_recon_diff", canonical_grid, global_step
+            )
 
 
 def compute_atom_position_accuracy(
