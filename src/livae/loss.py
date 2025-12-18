@@ -35,7 +35,7 @@ class RVAELoss(nn.Module):
     """rVAE loss with beta (KL) and gamma (cycle) weights.
 
     Cycle loss can be computed from mu_rotated (if provided) or set to zero.
-    All losses use mean reduction normalized by batch size for proper scaling.
+    All losses use mean reduction for proper per-element scaling.
     """
 
     def __init__(self, beta: float = 1.0, gamma: float = 0.0) -> None:
@@ -65,13 +65,15 @@ class RVAELoss(nn.Module):
         Returns:
             total_loss, recon_loss, kld_loss, cycle_loss
         """
-        # Reconstruction loss (mean over all elements)
+        # Reconstruction loss (mean over all pixels)
         recon_loss = F.mse_loss(recon_x, x, reduction="mean")
 
-        # KL divergence (mean over batch and latent dims)
-        kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        # KL divergence (sum over latent dims, mean over batch)
+        # Use sum over latent dims to make it comparable to pixel-level reconstruction
+        kld_per_sample = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+        kld_loss = torch.mean(kld_per_sample)
 
-        # Cycle consistency loss (mean over all elements) - only if mu_rotated provided
+        # Cycle consistency loss (mean over latent dims) - only if mu_rotated provided
         if mu_rotated is not None and self.gamma > 0:
             cycle_loss = F.mse_loss(mu, mu_rotated, reduction="mean")
         else:
