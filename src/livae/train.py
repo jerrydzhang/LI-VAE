@@ -291,6 +291,8 @@ def train_rvae_one_epoch(
     metric_logger: MetricLogger,
     device: torch.device,
     canonical_weight: float = 0.2,
+    scaler: torch.amp.GradScaler | None = None,
+    grad_max_norm: float | None = None,
 ) -> None:
     model.train()
     total_loss = 0.0
@@ -304,28 +306,47 @@ def train_rvae_one_epoch(
     latent_std_sum = 0.0
     rotation_std_sum = 0.0
     grad_norm_sum = 0.0
-    n_batches = 0
+    use_amp = scaler is not None
+    max_norm = grad_max_norm if grad_max_norm is not None else 20.0
 
     for x in data_loader:
         x = x.to(device)
 
-        rotated_recon, canonical_recon, theta, mu, logvar = model(x)
-
         optimizer.zero_grad(set_to_none=True)
 
-        # RVAELoss returns (total, recon, kld, cycle)
-        loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
-            rotated_recon, x, mu, logvar
-        )
-
-        if canonical_weight > 0 and canonical_recon is not None:
-            canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
-            canonical_loss = F.mse_loss(
-                canonical_recon, canonical_input, reduction="mean"
+        if use_amp:
+            with torch.autocast("cuda", enabled=True):
+                rotated_recon, canonical_recon, theta, mu, logvar = model(x)
+                loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
+                    rotated_recon, x, mu, logvar
+                )
+                if canonical_weight > 0 and canonical_recon is not None:
+                    canonical_input = rotate_to_canonical(
+                        x, theta, model.encoder.rotation_stn
+                    )
+                    canonical_loss = F.mse_loss(
+                        canonical_recon, canonical_input, reduction="mean"
+                    )
+                    loss = loss + canonical_weight * canonical_loss
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            rotated_recon, canonical_recon, theta, mu, logvar = model(x)
+            loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
+                rotated_recon, x, mu, logvar
             )
-            loss = loss + canonical_weight * canonical_loss
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=20.0)
+            if canonical_weight > 0 and canonical_recon is not None:
+                canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
+                canonical_loss = F.mse_loss(
+                    canonical_recon, canonical_input, reduction="mean"
+                )
+                loss = loss + canonical_weight * canonical_loss
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
+            optimizer.step()
 
         total_norm = 0.0
         for p in model.parameters():
