@@ -310,6 +310,8 @@ def train_rvae_one_epoch(
     max_norm = grad_max_norm if grad_max_norm is not None else 20.0
 
     for x in data_loader:
+        if isinstance(x, (list, tuple)):
+            x = x[0]
         x = x.to(device)
 
         optimizer.zero_grad(set_to_none=True)
@@ -420,6 +422,8 @@ def evaluate_rvae(
     rotation_std_sum = 0.0
     n_batches = 0
     for x in data_loader:
+        if isinstance(x, (list, tuple)):
+            x = x[0]
         # Assumed that the model returns
         # rotated_recon, recon, rotated_recon_rotation, mu, logvar
         rotated_recon, canonical_recon, theta, mu, logvar = model(x)
