@@ -101,10 +101,18 @@ def train_one_epoch(
                 canonical_input = rotate_to_canonical(
                     x, theta, model.encoder.rotation_stn
                 )
-                # Loss is on the final rotated representation
-                loss, batch_recon_loss, batch_kld_loss = criterion(
+                # Combined loss from both final and canonical reconstructions
+                loss_rotated, recon_loss_rotated, kld_loss = criterion(
                     rotated_recon, x, mu, logvar
                 )
+                #
+                _, recon_loss_canonical, _ = criterion(
+                    canonical_recon, canonical_input, mu, logvar
+                )
+                
+                loss = loss_rotated + recon_loss_canonical  # Add canonical recon loss, avoid double-counting KLD
+                batch_recon_loss = recon_loss_rotated + recon_loss_canonical
+                batch_kld_loss = kld_loss
             else:
                 # VAE: (recon, mu, logvar)
                 recon, mu, logvar = outputs
@@ -209,9 +217,17 @@ def evaluate(
                 canonical_input = rotate_to_canonical(
                     x, theta, model.encoder.rotation_stn
                 )
-                loss, batch_recon_loss, batch_kld_loss = criterion(
+                # Combined loss from both final and canonical reconstructions
+                loss_rotated, recon_loss_rotated, kld_loss = criterion(
                     rotated_recon, x, mu, logvar
                 )
+                _, recon_loss_canonical, _ = criterion(
+                    canonical_recon, canonical_input, mu, logvar
+                )
+
+                loss = loss_rotated + recon_loss_canonical
+                batch_recon_loss = recon_loss_rotated + recon_loss_canonical
+                batch_kld_loss = kld_loss
             else:
                 recon, mu, logvar = outputs
                 loss, batch_recon_loss, batch_kld_loss = criterion(
