@@ -78,7 +78,7 @@ def default_transform(
     patch: torch.Tensor,
     flip_prob: float = 0.5,
     jitter_amount: int = 4,
-    rotation: bool = False,
+    rotation: bool = True,
 ) -> torch.Tensor:
     """Default set of transforms: random flip, rotation, jitter, and scale"""
     scale_factor = random.uniform(0.9, 1.1)
