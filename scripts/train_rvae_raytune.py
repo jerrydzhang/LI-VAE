@@ -241,16 +241,17 @@ def init_ray_safe(temp_dir: str | None = None) -> None:
             # Create a clean temp directory for Ray
             if temp_dir is None:
                 temp_dir = tempfile.mkdtemp(prefix="ray_")
-            
+
             Path(temp_dir).mkdir(parents=True, exist_ok=True)
-            
+
             print(f"Initializing Ray cluster with temp directory: {temp_dir}")
             ray.init(
+                _temp_dir=temp_dir,
                 ignore_reinit_error=True,
                 logging_level="warning",
                 log_to_driver=False,
                 include_dashboard=False,
-                object_store_memory=int(100e6),  # 100MB for efficiency
+                object_store_memory=int(100e6),
             )
             print("Ray cluster initialized successfully.")
         except Exception as e:
@@ -304,13 +305,15 @@ def run_hyperparameter_search(args: argparse.Namespace) -> None:
             "lr": tune.loguniform(args.lr_min, args.lr_max),
             "latent_dim": tune.choice(args.latent_dims),
             "beta": tune.loguniform(args.beta_min, args.beta_max),
-            "weight_decay": tune.loguniform(args.weight_decay_min, args.weight_decay_max),
+            "weight_decay": tune.loguniform(
+                args.weight_decay_min, args.weight_decay_max
+            ),
             "batch_size": tune.choice(args.batch_sizes),
             # Fixed parameters
             "h5_paths": h5_paths,
             "patch_size": args.patch_size,
             "padding": args.padding,
-        "num_workers": args.num_workers,
+            "num_workers": args.num_workers,
             "prefetch_factor": args.prefetch_factor,
             "val_split": args.val_split,
             "dataset_name": args.dataset_name,
@@ -332,7 +335,9 @@ def run_hyperparameter_search(args: argparse.Namespace) -> None:
                 grace_period=grace_period,
                 reduction_factor=args.reduction_factor,
             )
-            print(f"ASHA Scheduler: grace_period={grace_period}, max_t={args.epochs}, reduction_factor={args.reduction_factor}")
+            print(
+                f"ASHA Scheduler: grace_period={grace_period}, max_t={args.epochs}, reduction_factor={args.reduction_factor}"
+            )
         elif args.scheduler == "pbt":
             scheduler = PopulationBasedTraining(
                 time_attr="epoch",
@@ -386,14 +391,17 @@ def run_hyperparameter_search(args: argparse.Namespace) -> None:
         print("\n" + "=" * 80)
         print("HYPERPARAMETER SEARCH COMPLETE")
         print("=" * 80)
-        
+
         if best_result is None or best_result.metrics is None:
             print("No successful trials completed.")
             print("Check trial error logs for details.")
         else:
             print(f"\nBest trial config:")
             for key, value in best_result.config.items():
-                if key not in ["h5_paths", "dataset_name"]:  # Skip long/non-essential params
+                if key not in [
+                    "h5_paths",
+                    "dataset_name",
+                ]:  # Skip long/non-essential params
                     print(f"  {key}: {value}")
 
             print(f"\nBest trial metrics:")
