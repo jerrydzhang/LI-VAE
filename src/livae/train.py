@@ -74,21 +74,23 @@ def train_one_epoch(
 
         with torch.autocast("cuda", enabled=use_amp):
             outputs = model(x)
+            canonical_recon = None
+            theta = None
+
             if len(outputs) == 3:
                 # VAE: (recon, mu, logvar)
                 recon, mu, logvar = outputs
-                loss, batch_recon_loss, batch_kld_loss = criterion(
-                    recon, x, mu, logvar
-                )
+                rotated_recon = recon
+                loss, batch_recon_loss, batch_kld_loss = criterion(recon, x, mu, logvar)
             elif len(outputs) == 5:
                 # rVAE: (rotated_recon, recon, theta, mu, logvar)
-                _, canonical_recon, theta, mu, logvar = outputs
+                rotated_recon, canonical_recon, theta, mu, logvar = outputs
                 # New objective: only reconstruct the canonical representation
                 canonical_input = rotate_to_canonical(
                     x, theta, model.encoder.rotation_stn
                 )
                 loss, batch_recon_loss, batch_kld_loss = criterion(
-                    canonical_recon, canonical_input, mu, logvar
+                    rotated_recon, x, mu, logvar
                 )
             else:
                 raise ValueError(f"Unexpected model output length: {len(outputs)}")
@@ -169,6 +171,7 @@ def evaluate(
     criterion: nn.Module,
     metric_logger: MetricLogger,
     device: torch.device,
+    canonical_weight: float = 0.0,
 ) -> None:
     """Generic evaluation loop that works with both VAE and rVAE models.
 
@@ -199,11 +202,12 @@ def evaluate(
 
             # Forward pass - handle both VAE and rVAE
             outputs = model(x)
+            canonical_recon = None
+            theta = None
+
             if len(outputs) == 3:
                 # VAE: (recon, mu, logvar)
                 rotated_recon, mu, logvar = outputs
-                canonical_recon = None
-                theta = None
             elif len(outputs) == 5:
                 # rVAE: (rotated_recon, recon, theta, mu, logvar)
                 rotated_recon, canonical_recon, theta, mu, logvar = outputs
@@ -225,7 +229,7 @@ def evaluate(
                     x, theta, model.encoder.rotation_stn
                 )
                 canonical_loss = F.mse_loss(
-                    canonical_recon, canonical_input, reduction="sum"
+                    canonical_recon, canonical_input, reduction="mean"
                 )
                 loss = loss + canonical_weight * canonical_loss
 
@@ -345,7 +349,6 @@ def train_rvae_one_epoch(
             if canonical_recon is not None:
                 canonical_input = rotate_to_canonical(
                     x, theta, model.encoder.rotation_stn
-            cycle_loss_sum += batch_cycle_loss.item()
                 )
                 canonical_psnr_sum += compute_psnr(canonical_recon, canonical_input)
                 canonical_ssim_sum += compute_ssim(canonical_recon, canonical_input)
@@ -386,6 +389,7 @@ def evaluate_rvae(
     total_loss = 0.0
     recon_loss_sum = 0.0
     kld_loss_sum = 0.0
+    cycle_loss_sum = 0.0
     psnr_sum = 0.0
     ssim_sum = 0.0
     canonical_psnr_sum = 0.0
@@ -414,6 +418,7 @@ def evaluate_rvae(
         total_loss += loss.item()
         recon_loss_sum += batch_recon_loss.item()
         kld_loss_sum += batch_kld_loss.item()
+        cycle_loss_sum += batch_cycle_loss.item()
 
         psnr_sum += compute_psnr(rotated_recon, x)
         ssim_sum += compute_ssim(rotated_recon, x)
@@ -435,6 +440,7 @@ def evaluate_rvae(
         val_loss=total_loss / n_batches,
         val_recon_loss=recon_loss_sum / n_batches,
         val_kld_loss=kld_loss_sum / n_batches,
+        val_cycle_loss=cycle_loss_sum / n_batches,
         val_psnr=psnr_sum / n_batches,
         val_ssim=ssim_sum / n_batches,
         val_latent_mean_abs=latent_mean_abs_sum / n_batches,
@@ -443,7 +449,6 @@ def evaluate_rvae(
         val_canonical_psnr=canonical_psnr_sum / n_batches,
         val_canonical_ssim=canonical_ssim_sum / n_batches,
     )
-                    cycle_loss_sum += batch_cycle_loss.item()
 
 
 class MetricLogger:
