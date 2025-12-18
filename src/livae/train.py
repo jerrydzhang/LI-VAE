@@ -64,7 +64,6 @@ def train_one_epoch(
     metric_logger: MetricLogger,
     device: torch.device,
     scaler: torch.amp.GradScaler | None = None,
-    canonical_weight: float = 0.0,
     grad_max_norm: float | None = None,
     agc_lambda: float | None = None,
 ) -> None:
@@ -103,37 +102,24 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
 
         with torch.autocast("cuda", enabled=use_amp):
-            outputs = model(x)
             if len(outputs) == 3:
                 # VAE: (recon, mu, logvar)
-                rotated_recon, mu, logvar = outputs
-                canonical_recon = None
-                theta = None
+                recon, mu, logvar = outputs
+                loss, batch_recon_loss, batch_kld_loss = criterion(
+                    recon, x, mu, logvar
+                )
             elif len(outputs) == 5:
                 # rVAE: (rotated_recon, recon, theta, mu, logvar)
-                rotated_recon, canonical_recon, theta, mu, logvar = outputs
-            else:
-                raise ValueError(f"Unexpected model output length: {len(outputs)}")
-
-            loss, batch_recon_loss, batch_kld_loss = criterion(
-                rotated_recon, x, mu, logvar
-            )
-
-            if (
-                canonical_weight > 0
-                and canonical_recon is not None
-                and theta is not None
-                and hasattr(model, "encoder")
-                and hasattr(model.encoder, "rotation_stn")
-            ):
+                _, canonical_recon, theta, mu, logvar = outputs
+                # New objective: only reconstruct the canonical representation
                 canonical_input = rotate_to_canonical(
                     x, theta, model.encoder.rotation_stn
                 )
-                # Use mean reduction to keep loss scale stable
-                canonical_loss = F.mse_loss(
-                    canonical_recon, canonical_input, reduction="mean"
+                loss, batch_recon_loss, batch_kld_loss = criterion(
+                    canonical_recon, canonical_input, mu, logvar
                 )
-                loss = loss + canonical_weight * canonical_loss
+            else:
+                raise ValueError(f"Unexpected model output length: {len(outputs)}")
 
         if use_amp:
             scaler.scale(loss).backward()
@@ -240,7 +226,6 @@ def evaluate(
     criterion: nn.Module,
     metric_logger: MetricLogger,
     device: torch.device,
-    canonical_weight: float = 0.0,
 ) -> None:
     """Generic evaluation loop that works with both VAE and rVAE models.
 
@@ -274,33 +259,22 @@ def evaluate(
             outputs = model(x)
             if len(outputs) == 3:
                 # VAE: (recon, mu, logvar)
-                rotated_recon, mu, logvar = outputs
-                canonical_recon = None
-                theta = None
+                recon, mu, logvar = outputs
+                loss, batch_recon_loss, batch_kld_loss = criterion(
+                    recon, x, mu, logvar
+                )
             elif len(outputs) == 5:
                 # rVAE: (rotated_recon, recon, theta, mu, logvar)
-                rotated_recon, canonical_recon, theta, mu, logvar = outputs
-            else:
-                raise ValueError(f"Unexpected model output length: {len(outputs)}")
-
-            loss, batch_recon_loss, batch_kld_loss = criterion(
-                rotated_recon, x, mu, logvar
-            )
-
-            if (
-                canonical_weight > 0
-                and canonical_recon is not None
-                and theta is not None
-                and hasattr(model, "encoder")
-                and hasattr(model.encoder, "rotation_stn")
-            ):
+                _, canonical_recon, theta, mu, logvar = outputs
+                # New objective: only reconstruct the canonical representation
                 canonical_input = rotate_to_canonical(
                     x, theta, model.encoder.rotation_stn
                 )
-                canonical_loss = F.mse_loss(
-                    canonical_recon, canonical_input, reduction="mean"
+                loss, batch_recon_loss, batch_kld_loss = criterion(
+                    canonical_recon, canonical_input, mu, logvar
                 )
-                loss = loss + canonical_weight * canonical_loss
+            else:
+                raise ValueError(f"Unexpected model output length: {len(outputs)}")
 
             total_loss += loss.item()
             recon_loss_sum += batch_recon_loss.item()
@@ -357,225 +331,15 @@ def evaluate(
 
 
 # =============================================================================
-# rVAE-specific training functions
+
+
+# rVAE-specific training functions have been removed as the generic
+
+
+# train_one_epoch and evaluate functions now handle both VAE and rVAE cases.
+
+
 # =============================================================================
-
-
-def train_rvae_one_epoch(
-    model: nn.Module,
-    data_loader: DataLoader,
-    optimizer: Optimizer,
-    criterion: nn.Module,
-    metric_logger: MetricLogger,
-    device: torch.device,
-    canonical_weight: float = 0.2,
-    grad_max_norm: float | None = None,
-    agc_lambda: float | None = None,
-) -> None:
-    model.train()
-    total_loss = 0.0
-    recon_loss_sum = 0.0
-    kld_loss_sum = 0.0
-    psnr_sum = 0.0
-    ssim_sum = 0.0
-    canonical_psnr_sum = 0.0
-    canonical_ssim_sum = 0.0
-    latent_mean_abs_sum = 0.0
-    latent_std_sum = 0.0
-    rotation_std_sum = 0.0
-    rotation_std_linear_sum = 0.0
-    grad_norm_sum = 0.0
-    grad_norm_pre_sum = 0.0
-    grad_norm_post_sum = 0.0
-    n_batches = 0
-
-    for x in data_loader:
-        x = x.to(device)
-
-        rotated_recon, canonical_recon, theta, mu, logvar = model(x)
-
-        optimizer.zero_grad(set_to_none=True)
-
-        loss, batch_recon_loss, batch_kld_loss = criterion(rotated_recon, x, mu, logvar)
-
-        if canonical_weight > 0 and canonical_recon is not None:
-            canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
-            canonical_loss = F.mse_loss(
-                canonical_recon, canonical_input, reduction="mean"
-            )
-            loss = loss + canonical_weight * canonical_loss
-        loss.backward()
-
-        # Pre-clip norm
-        pre_norm_sq = 0.0
-        for p in model.parameters():
-            if p.grad is not None:
-                pre_norm_sq += float(p.grad.detach().data.norm(2).item() ** 2)
-        pre_norm = pre_norm_sq ** 0.5
-
-        if agc_lambda is not None and agc_lambda > 0:
-            apply_agc(model.parameters(), agc_lambda)
-        elif grad_max_norm is not None:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_max_norm)
-
-        # Post-clip norm
-        total_norm_sq = 0.0
-        for p in model.parameters():
-            if p.grad is not None:
-                total_norm_sq += float(p.grad.detach().data.norm(2).item() ** 2)
-        total_norm = total_norm_sq ** 0.5
-        grad_norm_pre_sum += pre_norm
-        grad_norm_post_sum += total_norm
-        grad_norm_sum += total_norm
-
-        optimizer.step()
-
-        total_loss += loss.item()
-        recon_loss_sum += batch_recon_loss.item()
-        kld_loss_sum += batch_kld_loss.item()
-
-        with torch.no_grad():
-            psnr_sum += compute_psnr(rotated_recon, x)
-            ssim_sum += compute_ssim(rotated_recon, x)
-
-            if canonical_recon is not None:
-                canonical_input = rotate_to_canonical(
-                    x, theta, model.encoder.rotation_stn
-                )
-                canonical_psnr_sum += compute_psnr(canonical_recon, canonical_input)
-                canonical_ssim_sum += compute_ssim(canonical_recon, canonical_input)
-
-            latent_mean_abs_sum += torch.mean(torch.abs(mu)).item()
-            latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
-
-            if theta is not None:
-                angles = angles_from_theta(theta)
-                rotation_std_sum += circular_std(angles).item()
-                rotation_std_linear_sum += torch.std(angles).item()
-
-        n_batches += 1
-
-    metric_logger.update(
-        train_loss=total_loss / n_batches,
-        train_recon_loss=recon_loss_sum / n_batches,
-        train_kld_loss=kld_loss_sum / n_batches,
-        train_psnr=psnr_sum / n_batches,
-        train_ssim=ssim_sum / n_batches,
-        train_latent_mean_abs=latent_mean_abs_sum / n_batches,
-        train_latent_std=latent_std_sum / n_batches,
-        train_rotation_std=rotation_std_sum / n_batches,
-        train_rotation_std_linear=rotation_std_linear_sum / n_batches,
-        train_grad_norm=grad_norm_sum / n_batches,
-        train_grad_norm_pre=grad_norm_pre_sum / n_batches,
-        train_grad_norm_post=grad_norm_post_sum / n_batches,
-        train_canonical_psnr=canonical_psnr_sum / n_batches,
-        train_canonical_ssim=canonical_ssim_sum / n_batches,
-    )
-
-
-def apply_agc(
-    parameters: Iterable[torch.nn.Parameter],
-    clipping: float = 0.01,
-    eps: float = 1e-3,
-    skip_1d: bool = True,
-) -> None:
-    """Adaptive Gradient Clipping (AGC).
-
-    Scales gradients when ||g|| > clipping * ||p||, with optional skip of 1D params
-    (biases, norms). See Brock et al., 2021.
-
-    Parameters
-    ----------
-    parameters : Iterable[nn.Parameter]
-        Model parameters
-    clipping : float
-        Clipping factor (lambda). Typical values in [0.01, 0.1].
-    eps : float
-        Numerical stability epsilon
-    skip_1d : bool
-        Skip parameters with <=1 dimension (bias, LayerNorm/BatchNorm weights)
-    """
-    for p in parameters:
-        if p.grad is None:
-            continue
-        if skip_1d and p.ndim <= 1:
-            continue
-
-        param_norm = p.detach().norm(2)
-        grad_norm = p.grad.detach().norm(2)
-
-        if param_norm > eps and grad_norm > clipping * param_norm:
-            scale = (clipping * param_norm / (grad_norm + eps)).to(p.grad.dtype)
-            p.grad.detach().mul_(scale)
-
-
-def evaluate_rvae(
-    model: nn.Module,
-    data_loader: DataLoader,
-    criterion: nn.Module,
-    metric_logger: MetricLogger,
-    device: torch.device,
-    canonical_weight: float = 0.2,
-) -> None:
-    model.eval()
-    total_loss = 0.0
-    recon_loss_sum = 0.0
-    kld_loss_sum = 0.0
-    psnr_sum = 0.0
-    ssim_sum = 0.0
-    canonical_psnr_sum = 0.0
-    canonical_ssim_sum = 0.0
-    latent_mean_abs_sum = 0.0
-    latent_std_sum = 0.0
-    rotation_std_sum = 0.0
-    n_batches = 0
-    for x in data_loader:
-        # Assumed that the model returns
-        # rotated_recon, recon, rotated_recon_rotation, mu, logvar
-        rotated_recon, canonical_recon, theta, mu, logvar = model(x)
-
-        loss, batch_recon_loss, batch_kld_loss = criterion(rotated_recon, x, mu, logvar)
-
-        if canonical_weight > 0 and canonical_recon is not None:
-            canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
-            canonical_loss = F.mse_loss(
-                canonical_recon, canonical_input, reduction="mean"
-            )
-
-            loss = loss + canonical_weight * canonical_loss
-
-        total_loss += loss.item()
-        recon_loss_sum += batch_recon_loss.item()
-        kld_loss_sum += batch_kld_loss.item()
-
-        psnr_sum += compute_psnr(rotated_recon, x)
-        ssim_sum += compute_ssim(rotated_recon, x)
-
-        if canonical_recon is not None:
-            canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
-            canonical_psnr_sum += compute_psnr(canonical_recon, canonical_input)
-            canonical_ssim_sum += compute_ssim(canonical_recon, canonical_input)
-
-        latent_mean_abs_sum += torch.mean(torch.abs(mu)).item()
-        latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
-
-        if theta is not None:
-            rotation_std_sum += torch.std(theta).item()
-
-        n_batches += 1
-
-    metric_logger.update(
-        val_loss=total_loss / n_batches,
-        val_recon_loss=recon_loss_sum / n_batches,
-        val_kld_loss=kld_loss_sum / n_batches,
-        val_psnr=psnr_sum / n_batches,
-        val_ssim=ssim_sum / n_batches,
-        val_latent_mean_abs=latent_mean_abs_sum / n_batches,
-        val_latent_std=latent_std_sum / n_batches,
-        val_rotation_std=rotation_std_sum / n_batches,
-        val_canonical_psnr=canonical_psnr_sum / n_batches,
-        val_canonical_ssim=canonical_ssim_sum / n_batches,
-    )
 
 
 class MetricLogger:

@@ -184,7 +184,6 @@ def run_training(args: argparse.Namespace) -> None:
             train_logger,
             device,
             scaler=scaler,
-            canonical_weight=args.canonical_weight,
             grad_max_norm=args.grad_max_norm,
         )
 
@@ -194,7 +193,6 @@ def run_training(args: argparse.Namespace) -> None:
             criterion,
             val_logger,
             device,
-            canonical_weight=args.canonical_weight,
         )
 
         log_scalar_metrics_tensorboard(
@@ -343,13 +341,6 @@ def build_argparser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Number of epochs for beta warmup from 0 to beta (default: 10); increase to 20-30 for gentler warmup",
-    )
-
-    parser.add_argument(
-        "--canonical-weight",
-        type=float,
-        default=0.2,
-        help="Weight for canonical-frame consistency loss (0 to disable)",
     )
     parser.add_argument(
         "--grad-max-norm",
