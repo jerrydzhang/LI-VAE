@@ -311,18 +311,36 @@ def train_rvae_one_epoch(
     use_amp = scaler is not None
     max_norm = grad_max_norm if grad_max_norm is not None else 20.0
 
-    for x in data_loader:
-        if isinstance(x, (list, tuple)):
-            x = x[0]
-        x = x.to(device)
+    for batch in data_loader:
+        # Handle paired dataset: (x, x_rotated) or single x
+        if isinstance(batch, (list, tuple)):
+            if len(batch) == 2:
+                # Paired dataset for cycle consistency
+                x, x_rotated = batch
+                x = x.to(device)
+                x_rotated = x_rotated.to(device)
+            else:
+                # Single sample
+                x = batch[0].to(device)
+                x_rotated = None
+        else:
+            x = batch.to(device)
+            x_rotated = None
 
         optimizer.zero_grad(set_to_none=True)
 
         if use_amp:
             with torch.autocast("cuda", enabled=True):
                 rotated_recon, canonical_recon, theta, mu, logvar = model(x)
+                
+                # Compute mu_rotated for cycle consistency if we have paired data
+                if x_rotated is not None:
+                    mu_rotated, _, _ = model.encoder(x_rotated)
+                else:
+                    mu_rotated = None
+                    
                 loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
-                    rotated_recon, x, mu, logvar
+                    rotated_recon, x, mu, logvar, mu_rotated
                 )
                 if canonical_weight > 0 and canonical_recon is not None:
                     canonical_input = rotate_to_canonical(
@@ -339,8 +357,15 @@ def train_rvae_one_epoch(
             scaler.update()
         else:
             rotated_recon, canonical_recon, theta, mu, logvar = model(x)
+            
+            # Compute mu_rotated for cycle consistency if we have paired data
+            if x_rotated is not None:
+                mu_rotated, _, _ = model.encoder(x_rotated)
+            else:
+                mu_rotated = None
+                
             loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
-                rotated_recon, x, mu, logvar
+                rotated_recon, x, mu, logvar, mu_rotated
             )
             if canonical_weight > 0 and canonical_recon is not None:
                 canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
@@ -421,16 +446,35 @@ def evaluate_rvae(
     latent_std_sum = 0.0
     rotation_std_sum = 0.0
     n_batches = 0
-    for x in data_loader:
-        if isinstance(x, (list, tuple)):
-            x = x[0]
-        # Assumed that the model returns
-        # rotated_recon, recon, rotated_recon_rotation, mu, logvar
-        rotated_recon, canonical_recon, theta, mu, logvar = model(x)
+    with torch.no_grad():
+        for batch in data_loader:
+            # Handle paired dataset: (x, x_rotated) or single x
+            if isinstance(batch, (list, tuple)):
+                if len(batch) == 2:
+                    # Paired dataset for cycle consistency
+                    x, x_rotated = batch
+                    x = x.to(device)
+                    x_rotated = x_rotated.to(device)
+                else:
+                    # Single sample
+                    x = batch[0].to(device)
+                    x_rotated = None
+            else:
+                x = batch.to(device)
+                x_rotated = None
+            # Assumed that the model returns
+            # rotated_recon, recon, rotated_recon_rotation, mu, logvar
+            rotated_recon, canonical_recon, theta, mu, logvar = model(x)
 
-        loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
-            rotated_recon, x, mu, logvar
-        )
+            # Compute mu_rotated for cycle consistency if we have paired data
+            if x_rotated is not None:
+                mu_rotated, _, _ = model.encoder(x_rotated)
+            else:
+                mu_rotated = None
+
+            loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
+                rotated_recon, x, mu, logvar, mu_rotated
+            )
 
         if canonical_weight > 0 and canonical_recon is not None:
             canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
