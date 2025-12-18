@@ -17,6 +17,7 @@ from .utils import estimate_lattice_constant
 __all__ = [
     "PatchDataset",
     "AdaptiveLatticeDataset",
+    "PairedAdaptiveLatticeDataset",
     "default_transform",
     "generate_lattice_grid",
 ]
@@ -113,6 +114,45 @@ def default_transform(
         patch = torch.roll(patch, shifts=(shift_y, shift_x), dims=(-2, -1))
 
     return patch
+
+
+def paired_transform(
+    patch: torch.Tensor,
+    flip_prob: float = 0.5,
+    jitter_amount: int = 4,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Default set of transforms: random flip, rotation, jitter, and scale"""
+    scale_factor = random.uniform(0.9, 1.1)
+    patch = TF.affine(
+        patch,
+        angle=0.0,
+        translate=[0, 0],
+        scale=scale_factor,
+        shear=[0.0],
+        interpolation=TF.InterpolationMode.BILINEAR,
+    )
+
+    if random.random() < flip_prob:
+        patch = TF.hflip(patch)
+
+    if random.random() < flip_prob:
+        patch = TF.vflip(patch)
+
+    if jitter_amount > 0:
+        shift_x = random.randint(-jitter_amount, jitter_amount)
+        shift_y = random.randint(-jitter_amount, jitter_amount)
+        patch = torch.roll(patch, shifts=(shift_y, shift_x), dims=(-2, -1))
+
+    angle = random.uniform(0, 360)
+    rotated_patch = TF.rotate(
+        patch,
+        angle=angle,
+        interpolation=TF.InterpolationMode.BILINEAR,
+        expand=False,
+        fill=0,
+    )
+
+    return patch, rotated_patch
 
 
 def get_clean_peaks(img, min_distance=5, threshold_rel=0.01):
@@ -608,3 +648,92 @@ class AdaptiveLatticeDataset(Dataset):
         plt.legend()
         plt.axis("off")
         plt.show()
+
+
+class PairedAdaptiveLatticeDataset(AdaptiveLatticeDataset):
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Get patch and label"""
+        img_idx = 0
+        while idx >= len(self.sample_coords[img_idx]):
+            idx -= len(self.sample_coords[img_idx])
+            img_idx += 1
+
+        cy, cx = self.sample_coords[img_idx][idx]
+        img = self.images[img_idx]
+
+        # Use padding to define a larger ROI to avoid black edges on rotation
+        roi_buffer = max(16, 2 * self.padding)
+        roi_size = self.patch_size + roi_buffer
+
+        y_int, x_int = int(round(cy)), int(round(cx))
+
+        y_start = y_int - roi_size // 2
+        x_start = x_int - roi_size // 2
+        y_end = y_start + roi_size
+        x_end = x_start + roi_size
+
+        h, w = img.shape
+        pad_top = max(0, -y_start)
+        pad_left = max(0, -x_start)
+        pad_bottom = max(0, y_end - h)
+        pad_right = max(0, x_end - w)
+
+        y_start = max(0, y_start)
+        x_start = max(0, x_start)
+        y_end = min(h, y_end)
+        x_end = min(w, x_end)
+
+        roi = img[y_start:y_end, x_start:x_end]
+
+        roi_tensor = torch.from_numpy(roi).float().unsqueeze(0).unsqueeze(0)
+
+        if pad_top > 0 or pad_left > 0 or pad_bottom > 0 or pad_right > 0:
+            roi_tensor = TF.pad(roi_tensor, [pad_left, pad_top, pad_right, pad_bottom])
+
+        roi_h, roi_w = roi_tensor.shape[-2:]
+
+        eff_x_start = x_int - roi_size // 2
+        eff_y_start = y_int - roi_size // 2
+
+        rel_cx = cx - eff_x_start
+        rel_cy = cy - eff_y_start
+
+        shift_x = (roi_w / 2.0) - rel_cx
+        shift_y = (roi_h / 2.0) - rel_cy
+
+        patch = TF.affine(
+            roi_tensor,
+            angle=0.0,
+            translate=[shift_x, shift_y],
+            scale=1.0,
+            shear=[0.0],
+            interpolation=TF.InterpolationMode.BILINEAR,
+        ).squeeze(0)
+
+        # First take a larger crop, apply transform (rotation), then crop back
+        padded_size = self.patch_size + 2 * self.padding
+        patch_big = TF.center_crop(patch, [padded_size, padded_size])
+
+        if self.transform:
+            patch, rotated_patch = self.transform(patch_big)
+        else:
+            rotated_patch = patch_big.clone()
+
+        patch_cropped = TF.center_crop(patch, [self.patch_size, self.patch_size])
+        rotated_patch_cropped = TF.center_crop(rotated_patch, [self.patch_size, self.patch_size])
+
+        min_val = patch_cropped.min()
+        max_val = patch_cropped.max()
+        if max_val > min_val:
+            patch_final = (patch_cropped - min_val) / (max_val - min_val)
+        else:
+            patch_final = torch.zeros_like(patch_cropped)
+
+        min_val_rotated = rotated_patch_cropped.min()
+        max_val_rotated = rotated_patch_cropped.max()
+        if max_val_rotated > min_val_rotated:
+            rotated_patch_final = (rotated_patch_cropped - min_val_rotated) / (max_val_rotated - min_val_rotated)
+        else:
+            rotated_patch_final = torch.zeros_like(rotated_patch_cropped)
+
+        return patch_final, rotated_patch_final

@@ -11,15 +11,15 @@ from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from livae.data import AdaptiveLatticeDataset, default_transform
-from livae.loss import VAELoss
+from livae.data import PairedAdaptiveLatticeDataset, paired_transform
+from livae.loss import RVAELoss
 from livae.model import RVAE
 from livae.train import (
     MetricLogger,
-    evaluate,
+    evaluate_rvae,
     log_reconstructions_tensorboard,
     log_scalar_metrics_tensorboard,
-    train_one_epoch,
+    train_rvae_one_epoch,
 )
 from livae.utils import load_image_from_h5
 
@@ -64,8 +64,8 @@ def make_dataloaders(
     """
     print(f"Loading data from: {h5_paths}")
     images = [load_image_from_h5(p, dataset_name=dataset_name) for p in h5_paths]  # type: ignore
-    dataset = AdaptiveLatticeDataset(
-        images, patch_size=patch_size, padding=padding, transform=default_transform
+    dataset = PairedAdaptiveLatticeDataset(
+        images, patch_size=patch_size, padding=padding, transform=paired_transform
     )
 
     val_len = max(1, int(len(dataset) * val_split))
@@ -147,8 +147,9 @@ def run_training(args: argparse.Namespace) -> None:
         optimizer, T_max=args.epochs, eta_min=args.lr * 0.01
     )
 
-    criterion = VAELoss(
+    criterion = RVAELoss(
         beta=0.0 if args.beta_annealing else args.beta,
+        gamma=args.gamma,
     )
 
     scaler = (
@@ -165,7 +166,7 @@ def run_training(args: argparse.Namespace) -> None:
     val_logger = MetricLogger()
 
     print(f"\nStarting training for {args.epochs} epochs...")
-    print(f"Learning rate: {args.lr}, Beta: {args.beta}")
+    print(f"Learning rate: {args.lr}, Beta: {args.beta}, Gamma: {args.gamma}")
     if args.beta_annealing:
         print(f"Beta annealing enabled: {args.beta_annealing_epochs} epochs warmup")
 
@@ -176,7 +177,7 @@ def run_training(args: argparse.Namespace) -> None:
             else:
                 current_beta = args.beta
             criterion.beta = current_beta
-        train_one_epoch(
+        train_rvae_one_epoch(
             model,
             train_loader,
             optimizer,
@@ -187,7 +188,7 @@ def run_training(args: argparse.Namespace) -> None:
             grad_max_norm=args.grad_max_norm,
         )
 
-        evaluate(
+        evaluate_rvae(
             model,
             val_loader,
             criterion,
@@ -203,10 +204,10 @@ def run_training(args: argparse.Namespace) -> None:
         )
 
         if epoch % args.vis_every == 0:
-            sample_batch = next(iter(val_loader))[: args.vis_samples].to(device)
+            sample_batch = next(iter(val_loader))
             log_reconstructions_tensorboard(
                 model,
-                sample_batch,
+                sample_batch[0][: args.vis_samples].to(device),
                 writer,
                 global_step=epoch,
                 device=device,
@@ -329,6 +330,12 @@ def build_argparser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help="Beta coefficient for KL divergence (higher = stronger KL penalty, but risk of latent collapse with mean reduction)",
+    )
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=1.0,
+        help="Gamma coefficient for cycle consistency loss",
     )
 
     parser.add_argument(

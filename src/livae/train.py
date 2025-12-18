@@ -56,7 +56,7 @@ def circular_std(angles: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     return torch.sqrt(torch.clamp(-2.0 * torch.log(R), max=1e6))
 
 
-def train_one_epoch(
+def _train_vae_one_epoch(
     model: nn.Module,
     data_loader: DataLoader,
     optimizer: Optimizer,
@@ -65,9 +65,8 @@ def train_one_epoch(
     device: torch.device,
     scaler: torch.amp.GradScaler | None = None,
     grad_max_norm: float | None = None,
-    agc_lambda: float | None = None,
 ) -> None:
-    """Generic training loop that works with both VAE and rVAE models."""
+    """VAE training loop for one epoch."""
     model.train()
     n_batches = 0
     use_amp = scaler is not None
@@ -78,12 +77,8 @@ def train_one_epoch(
     kld_loss_sum = 0.0
     psnr_sum = 0.0
     ssim_sum = 0.0
-    final_psnr_sum = 0.0  # For RVAE's final rotated output
-    final_ssim_sum = 0.0
-    rotation_std_sum = 0.0
     latent_mean_abs_sum = 0.0
     latent_std_sum = 0.0
-    grad_norm_sum = 0.0
 
     for x in tqdm(data_loader, desc="Training", leave=False):
         if isinstance(x, (list, tuple)):
@@ -92,32 +87,8 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
 
         with torch.autocast("cuda", enabled=use_amp):
-            outputs = model(x)
-            is_rvae = len(outputs) == 5
-
-            if is_rvae:
-                # RVAE: (rotated_recon, recon, theta, mu, logvar)
-                rotated_recon, canonical_recon, theta, mu, logvar = outputs
-                canonical_input = rotate_to_canonical(
-                    x, theta, model.encoder.rotation_stn
-                )
-                # Combined loss from both final and canonical reconstructions
-                loss_rotated, recon_loss_rotated, kld_loss = criterion(
-                    rotated_recon, x, mu, logvar
-                )
-                _, recon_loss_canonical, _ = criterion(
-                    canonical_recon, canonical_input.detach(), mu, logvar
-                )
-
-                loss = (
-                    loss_rotated + recon_loss_canonical
-                )  # Add canonical recon loss, avoid double-counting KLD
-                batch_recon_loss = recon_loss_rotated + recon_loss_canonical
-                batch_kld_loss = kld_loss
-            else:
-                # VAE: (recon, mu, logvar)
-                recon, mu, logvar = outputs
-                loss, batch_recon_loss, batch_kld_loss = criterion(recon, x, mu, logvar)
+            recon, mu, logvar = model(x)
+            loss, recon_loss, kld_loss = criterion(recon, x, mu, logvar)
 
         if use_amp:
             scaler.scale(loss).backward()
@@ -138,28 +109,15 @@ def train_one_epoch(
 
         # --- Metric Accumulation ---
         total_loss_sum += loss.item()
-        recon_loss_sum += batch_recon_loss.item()
-        kld_loss_sum += batch_kld_loss.item()
+        recon_loss_sum += recon_loss.item()
+        kld_loss_sum += kld_loss.item()
         n_batches += 1
 
         with torch.no_grad():
             latent_mean_abs_sum += torch.mean(torch.abs(mu)).item()
             latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
-
-            if is_rvae:
-                # For RVAE, primary PSNR is on canonical, matching the loss
-                psnr_sum += compute_psnr(canonical_recon, canonical_input)
-                ssim_sum += compute_ssim(canonical_recon, canonical_input)
-                # Also log the final rotated output for diagnostics
-                final_psnr_sum += compute_psnr(rotated_recon, x)
-                final_ssim_sum += compute_ssim(rotated_recon, x)
-                if theta is not None:
-                    angles = angles_from_theta(theta)
-                    rotation_std_sum += circular_std(angles).item()
-            else:
-                # For VAE, PSNR is on the direct reconstruction
-                psnr_sum += compute_psnr(recon, x)
-                ssim_sum += compute_ssim(recon, x)
+            psnr_sum += compute_psnr(recon, x)
+            ssim_sum += compute_ssim(recon, x)
 
     # --- Metric Averaging and Logging ---
     metrics = {
@@ -171,22 +129,17 @@ def train_one_epoch(
         "train_latent_mean_abs": latent_mean_abs_sum / n_batches,
         "train_latent_std": latent_std_sum / n_batches,
     }
-    if is_rvae:
-        metrics["train_rotation_std"] = rotation_std_sum / n_batches
-        metrics["train_final_psnr"] = final_psnr_sum / n_batches
-        metrics["train_final_ssim"] = final_ssim_sum / n_batches
-
     metric_logger.update(**metrics)
 
 
-def evaluate(
+def _evaluate_vae(
     model: nn.Module,
     data_loader: DataLoader,
     criterion: nn.Module,
     metric_logger: MetricLogger,
     device: torch.device,
 ) -> None:
-    """Generic evaluation loop that works with both VAE and rVAE models."""
+    """VAE evaluation loop."""
     model.eval()
     n_batches = 0
 
@@ -196,9 +149,6 @@ def evaluate(
     kld_loss_sum = 0.0
     psnr_sum = 0.0
     ssim_sum = 0.0
-    final_psnr_sum = 0.0  # For RVAE's final rotated output
-    final_ssim_sum = 0.0
-    rotation_std_sum = 0.0
     latent_mean_abs_sum = 0.0
     latent_std_sum = 0.0
 
@@ -208,49 +158,19 @@ def evaluate(
                 x = x[0]
             x = x.to(device)
 
-            outputs = model(x)
-            is_rvae = len(outputs) == 5
-
-            if is_rvae:
-                rotated_recon, canonical_recon, theta, mu, logvar = outputs
-                canonical_input = rotate_to_canonical(
-                    x, theta, model.encoder.rotation_stn
-                )
-                # Combined loss from both final and canonical reconstructions
-                loss_rotated, recon_loss_rotated, kld_loss = criterion(
-                    rotated_recon, x, mu, logvar
-                )
-                _, recon_loss_canonical, _ = criterion(
-                    canonical_recon, canonical_input.detach(), mu, logvar
-                )
-
-                loss = loss_rotated + recon_loss_canonical
-                batch_recon_loss = recon_loss_rotated + recon_loss_canonical
-                batch_kld_loss = kld_loss
-            else:
-                recon, mu, logvar = outputs
-                loss, batch_recon_loss, batch_kld_loss = criterion(recon, x, mu, logvar)
+            recon, mu, logvar = model(x)
+            loss, recon_loss, kld_loss = criterion(recon, x, mu, logvar)
 
             # --- Metric Accumulation ---
             total_loss_sum += loss.item()
-            recon_loss_sum += batch_recon_loss.item()
-            kld_loss_sum += batch_kld_loss.item()
+            recon_loss_sum += recon_loss.item()
+            kld_loss_sum += kld_loss.item()
             n_batches += 1
 
             latent_mean_abs_sum += torch.mean(torch.abs(mu)).item()
             latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
-
-            if is_rvae:
-                psnr_sum += compute_psnr(canonical_recon, canonical_input)
-                ssim_sum += compute_ssim(canonical_recon, canonical_input)
-                final_psnr_sum += compute_psnr(rotated_recon, x)
-                final_ssim_sum += compute_ssim(rotated_recon, x)
-                if theta is not None:
-                    angles = angles_from_theta(theta)
-                    rotation_std_sum += circular_std(angles).item()
-            else:
-                psnr_sum += compute_psnr(recon, x)
-                ssim_sum += compute_ssim(recon, x)
+            psnr_sum += compute_psnr(recon, x)
+            ssim_sum += compute_ssim(recon, x)
 
     # --- Metric Averaging and Logging ---
     metrics = {
@@ -262,24 +182,185 @@ def evaluate(
         "val_latent_mean_abs": latent_mean_abs_sum / n_batches,
         "val_latent_std": latent_std_sum / n_batches,
     }
-    if is_rvae:
-        metrics["val_rotation_std"] = rotation_std_sum / n_batches
-        metrics["val_final_psnr"] = final_psnr_sum / n_batches
-        metrics["val_final_ssim"] = final_ssim_sum / n_batches
-
     metric_logger.update(**metrics)
 
 
-# =============================================================================
+def train_rvae_one_epoch(
+    model: nn.Module,
+    data_loader: DataLoader,
+    optimizer: Optimizer,
+    criterion: nn.Module,
+    metric_logger: MetricLogger,
+    device: torch.device,
+    scaler: torch.amp.GradScaler | None = None,
+    grad_max_norm: float | None = None,
+) -> None:
+    """rVAE training loop for one epoch."""
+    model.train()
+    n_batches = 0
+    use_amp = scaler is not None
+
+    # Initalize metric accumulators
+    total_loss_sum = 0.0
+    recon_loss_sum = 0.0
+    kld_loss_sum = 0.0
+    cycle_loss_sum = 0.0
+    psnr_sum = 0.0
+    ssim_sum = 0.0
+    latent_mean_abs_sum = 0.0
+    latent_std_sum = 0.0
+
+    for x, x_rotated in tqdm(data_loader, desc="Training", leave=False):
+        x = x.to(device, non_blocking=True)
+        x_rotated = x_rotated.to(device, non_blocking=True)
+        optimizer.zero_grad(set_to_none=True)
+
+        with torch.autocast("cuda", enabled=use_amp):
+            rotated_recon, _, _, mu, logvar = model(x)
+            _, _, _, mu_rotated, _ = model(x_rotated)
+
+            loss, recon_loss, kld_loss, cycle_loss = criterion(
+                rotated_recon, x, mu, logvar, mu_rotated
+            )
+
+        if use_amp:
+            scaler.scale(loss).backward()
+            if grad_max_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=grad_max_norm
+                )
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if grad_max_norm is not None:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=grad_max_norm
+                )
+            optimizer.step()
+
+        # --- Metric Accumulation ---
+        total_loss_sum += loss.item()
+        recon_loss_sum += recon_loss.item()
+        kld_loss_sum += kld_loss.item()
+        cycle_loss_sum += cycle_loss.item()
+        n_batches += 1
+
+        with torch.no_grad():
+            latent_mean_abs_sum += torch.mean(torch.abs(mu)).item()
+            latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
+            psnr_sum += compute_psnr(rotated_recon, x)
+            ssim_sum += compute_ssim(rotated_recon, x)
+
+    # --- Metric Averaging and Logging ---
+    metrics = {
+        "train_loss": total_loss_sum / n_batches,
+        "train_recon_loss": recon_loss_sum / n_batches,
+        "train_kld_loss": kld_loss_sum / n_batches,
+        "train_cycle_loss": cycle_loss_sum / n_batches,
+        "train_psnr": psnr_sum / n_batches,
+        "train_ssim": ssim_sum / n_batches,
+        "train_latent_mean_abs": latent_mean_abs_sum / n_batches,
+        "train_latent_std": latent_std_sum / n_batches,
+    }
+    metric_logger.update(**metrics)
 
 
-# rVAE-specific training functions have been removed as the generic
+def evaluate_rvae(
+    model: nn.Module,
+    data_loader: DataLoader,
+    criterion: nn.Module,
+    metric_logger: MetricLogger,
+    device: torch.device,
+) -> None:
+    """rVAE evaluation loop."""
+    model.eval()
+    n_batches = 0
+
+    # Initalize metric accumulators
+    total_loss_sum = 0.0
+    recon_loss_sum = 0.0
+    kld_loss_sum = 0.0
+    cycle_loss_sum = 0.0
+    psnr_sum = 0.0
+    ssim_sum = 0.0
+    latent_mean_abs_sum = 0.0
+    latent_std_sum = 0.0
+
+    with torch.no_grad():
+        for x, x_rotated in data_loader:
+            x = x.to(device)
+            x_rotated = x_rotated.to(device)
+
+            rotated_recon, _, _, mu, logvar = model(x)
+            _, _, _, mu_rotated, _ = model(x_rotated)
+
+            loss, recon_loss, kld_loss, cycle_loss = criterion(
+                rotated_recon, x, mu, logvar, mu_rotated
+            )
+
+            # --- Metric Accumulation ---
+            total_loss_sum += loss.item()
+            recon_loss_sum += recon_loss.item()
+            kld_loss_sum += kld_loss.item()
+            cycle_loss_sum += cycle_loss.item()
+            n_batches += 1
+
+            latent_mean_abs_sum += torch.mean(torch.abs(mu)).item()
+            latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
+            psnr_sum += compute_psnr(rotated_recon, x)
+            ssim_sum += compute_ssim(rotated_recon, x)
+
+    # --- Metric Averaging and Logging ---
+    metrics = {
+        "val_loss": total_loss_sum / n_batches,
+        "val_recon_loss": recon_loss_sum / n_batches,
+        "val_kld_loss": kld_loss_sum / n_batches,
+        "val_cycle_loss": cycle_loss_sum / n_batches,
+        "val_psnr": psnr_sum / n_batches,
+        "val_ssim": ssim_sum / n_batches,
+        "val_latent_mean_abs": latent_mean_abs_sum / n_batches,
+        "val_latent_std": latent_std_sum / n_batches,
+    }
+    metric_logger.update(**metrics)
 
 
-# train_one_epoch and evaluate functions now handle both VAE and rVAE cases.
+def train_one_epoch(
+    model: nn.Module,
+    data_loader: DataLoader,
+    optimizer: Optimizer,
+    criterion: nn.Module,
+    metric_logger: MetricLogger,
+    device: torch.device,
+    scaler: torch.amp.GradScaler | None = None,
+    grad_max_norm: float | None = None,
+) -> None:
+    """Generic training loop that works with both VAE and rVAE models."""
+    # Check if the dataloader returns paired data
+    is_paired = isinstance(next(iter(data_loader)), (list, tuple)) and len(next(iter(data_loader))) == 2
+    
+    if is_paired:
+        train_rvae_one_epoch(model, data_loader, optimizer, criterion, metric_logger, device, scaler, grad_max_norm)
+    else:
+        _train_vae_one_epoch(model, data_loader, optimizer, criterion, metric_logger, device, scaler, grad_max_norm)
 
 
-# =============================================================================
+def evaluate(
+    model: nn.Module,
+    data_loader: DataLoader,
+    criterion: nn.Module,
+    metric_logger: MetricLogger,
+    device: torch.device,
+) -> None:
+    """Generic evaluation loop that works with both VAE and rVAE models."""
+    # Check if the dataloader returns paired data
+    is_paired = isinstance(next(iter(data_loader)), (list, tuple)) and len(next(iter(data_loader))) == 2
+
+    if is_paired:
+        evaluate_rvae(model, data_loader, criterion, metric_logger, device)
+    else:
+        _evaluate_vae(model, data_loader, criterion, metric_logger, device)
 
 
 class MetricLogger:
