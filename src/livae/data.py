@@ -78,8 +78,15 @@ def default_transform(
     patch: torch.Tensor,
     flip_prob: float = 0.5,
     jitter_amount: int = 4,
+    rotation: bool = True,
 ) -> torch.Tensor:
     """Default set of transforms: random flip, rotation and jitter."""
+    if rotation:
+        angle = random.uniform(0, 360)
+        patch = TF.rotate(
+            patch, angle=angle, interpolation=TF.InterpolationMode.BILINEAR
+        )
+
     if random.random() < flip_prob:
         patch = TF.hflip(patch)
 
@@ -210,12 +217,17 @@ class PatchDataset(Dataset):
             interpolation=TF.InterpolationMode.BILINEAR,
         ).squeeze(0)
 
-        patch = TF.center_crop(patch, [self.patch_size, self.patch_size])
+        # Take a larger crop first to preserve content during rotation,
+        # then rotate, and finally center-crop down to the requested size.
+        padded_size = self.patch_size + 2 * self.padding
+        patch_big = TF.center_crop(patch, [padded_size, padded_size])
 
         if self.transform:
-            patch = self.transform(patch)
+            patch_big = self.transform(patch_big)
 
-        return patch
+        patch_final = TF.center_crop(patch_big, [self.patch_size, self.patch_size])
+
+        return patch_final
 
     def plot_peaks(
         self,
@@ -271,7 +283,7 @@ class AdaptiveLatticeDataset(Dataset):
         self,
         images: list[np.ndarray],
         patch_size: int,
-        padding: int = 4,
+        padding: int = 32,
         transform: TransformFn | None = default_transform,
         detection_threshold: float = 0.6,
     ):
@@ -447,7 +459,7 @@ class AdaptiveLatticeDataset(Dataset):
         return sum(len(coords) for coords in self.sample_coords)
 
     def __getitem__(self, idx: int) -> torch.Tensor:
-        """Get patch and label (optimized for speed)."""
+        """Get patch and label"""
         img_idx = 0
         while idx >= len(self.sample_coords[img_idx]):
             idx -= len(self.sample_coords[img_idx])
@@ -456,7 +468,8 @@ class AdaptiveLatticeDataset(Dataset):
         cy, cx = self.sample_coords[img_idx][idx]
         img = self.images[img_idx]
 
-        roi_buffer = 16
+        # Use padding to define a larger ROI to avoid black edges on rotation
+        roi_buffer = max(16, 2 * self.padding)
         roi_size = self.patch_size + roi_buffer
 
         y_int, x_int = int(round(cy)), int(round(cx))
@@ -504,12 +517,16 @@ class AdaptiveLatticeDataset(Dataset):
             interpolation=TF.InterpolationMode.BILINEAR,
         ).squeeze(0)
 
-        patch = TF.center_crop(patch, [self.patch_size, self.patch_size])
+        # First take a larger crop, apply transform (rotation), then crop back
+        padded_size = self.patch_size + 2 * self.padding
+        patch_big = TF.center_crop(patch, [padded_size, padded_size])
 
         if self.transform:
-            patch = self.transform(patch)
+            patch_big = self.transform(patch_big)
 
-        return patch
+        patch_final = TF.center_crop(patch_big, [self.patch_size, self.patch_size])
+
+        return patch_final
 
     def plot_lattice(
         self,
