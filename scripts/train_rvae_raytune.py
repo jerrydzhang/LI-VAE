@@ -571,7 +571,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cpus-per-trial",
         type=float,
-        default=2,
+        default=8,
         help="CPUs allocated per trial",
     )
     parser.add_argument(
