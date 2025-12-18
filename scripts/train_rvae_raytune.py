@@ -3,12 +3,11 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+import pickle
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
-
-# Initialize Ray safely
-import getpass
 
 import torch
 import ray
@@ -213,16 +212,19 @@ def train_rvae_tune(config: dict[str, Any]) -> None:
             "epoch": epoch,
         }
 
-        # Create checkpoint for this trial
+        # Create checkpoint for this trial using Ray Train's new API
         checkpoint_data = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
         }
-        checkpoint = Checkpoint.from_dict(checkpoint_data)
-
-        # Report to Ray Tune with checkpoint
-        train.report(metrics, checkpoint=checkpoint)
+        with tempfile.TemporaryDirectory() as checkpoint_dir:
+            checkpoint_path = os.path.join(checkpoint_dir, "checkpoint.pkl")
+            with open(checkpoint_path, "wb") as fp:
+                pickle.dump(checkpoint_data, fp)
+            checkpoint = Checkpoint.from_directory(checkpoint_dir)
+            # Report to Ray Tune with checkpoint
+            train.report(metrics, checkpoint=checkpoint)
 
         # Reset loggers
         train_logger.reset()
