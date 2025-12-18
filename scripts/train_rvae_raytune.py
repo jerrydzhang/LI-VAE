@@ -3,11 +3,14 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
-import os
 import torch
+from ray import init as ray_init
+from ray import shutdown as ray_shutdown
 from ray import train, tune
 from ray.train import Checkpoint
 from ray.tune.schedulers import ASHAScheduler, PopulationBasedTraining
@@ -15,6 +18,7 @@ from ray.tune.search.hyperopt import HyperOptSearch
 
 # Suppress Ray deprecation warnings
 os.environ["RAY_TRAIN_ENABLE_V2_MIGRATION_WARNINGS"] = "0"
+os.environ["RAY_memory_monitor_refresh_ms"] = "0"
 from torch.utils.data import DataLoader, random_split
 
 from livae.data import AdaptiveLatticeDataset, default_transform
@@ -227,6 +231,46 @@ def train_rvae_tune(config: dict[str, Any]) -> None:
         val_logger.reset()
 
 
+def init_ray_safe(temp_dir: str | None = None) -> None:
+    """Safely initialize Ray with proper configuration.
+
+    Parameters
+    ----------
+    temp_dir : str | None
+        Temporary directory for Ray logs. If None, uses system temp.
+    """
+    # Check if Ray is already initialized
+    if not ray_init.is_initialized():
+        try:
+            # Create a clean temp directory for Ray
+            if temp_dir is None:
+                temp_dir = tempfile.mkdtemp(prefix="ray_")
+            
+            Path(temp_dir).mkdir(parents=True, exist_ok=True)
+            
+            print(f"Initializing Ray cluster with temp directory: {temp_dir}")
+            ray_init(
+                ignore_reinit_error=True,
+                logging_level="warning",
+                log_to_driver=False,
+                include_dashboard=False,
+                object_store_memory=int(100e6),  # 100MB for efficiency
+            )
+            print("Ray cluster initialized successfully.")
+        except Exception as e:
+            print(f"Warning: Ray initialization had issues: {e}")
+            print("Attempting to continue anyway...")
+
+
+def cleanup_ray() -> None:
+    """Safely shutdown Ray."""
+    try:
+        ray_shutdown()
+        print("Ray cluster shut down successfully.")
+    except Exception as e:
+        print(f"Warning during Ray shutdown: {e}")
+
+
 def run_hyperparameter_search(args: argparse.Namespace) -> None:
     """Run Ray Tune hyperparameter search.
 
@@ -246,6 +290,11 @@ def run_hyperparameter_search(args: argparse.Namespace) -> None:
     print(f"Starting Ray Tune hyperparameter search...")
     print(f"Number of trials: {args.num_samples}")
     print(f"Max concurrent trials: {args.max_concurrent}")
+
+    # Initialize Ray safely
+    temp_ray_dir = tempfile.mkdtemp(prefix="ray_tune_")
+    try:
+        init_ray_safe(temp_dir=temp_ray_dir)
 
     # Define search space
     config = {
@@ -326,42 +375,52 @@ def run_hyperparameter_search(args: argparse.Namespace) -> None:
         ),
     )
 
-    # Run the search
-    results = tuner.fit()
+    try:
+        # Run the search
+        results = tuner.fit()
 
-    # Get best trial
-    best_result = results.get_best_result(metric="loss", mode="min")
+        # Get best trial
+        best_result = results.get_best_result(metric="loss", mode="min")
 
-    print("\n" + "=" * 80)
-    print("HYPERPARAMETER SEARCH COMPLETE")
-    print("=" * 80)
-    print(f"\nBest trial config:")
-    for key, value in best_result.config.items():
-        if key not in ["h5_paths", "dataset_name"]:  # Skip long/non-essential params
-            print(f"  {key}: {value}")
+        print("\n" + "=" * 80)
+        print("HYPERPARAMETER SEARCH COMPLETE")
+        print("=" * 80)
+        print(f"\nBest trial config:")
+        for key, value in best_result.config.items():
+            if key not in ["h5_paths", "dataset_name"]:  # Skip long/non-essential params
+                print(f"  {key}: {value}")
 
-    print(f"\nBest trial metrics:")
-    print(f"  val_loss: {best_result.metrics['val_loss']:.4f}")
-    print(f"  val_psnr: {best_result.metrics.get('val_psnr', 0):.2f}")
-    print(f"  train_loss: {best_result.metrics['train_loss']:.4f}")
+        print(f"\nBest trial metrics:")
+        print(f"  val_loss: {best_result.metrics['val_loss']:.4f}")
+        print(f"  val_psnr: {best_result.metrics.get('val_psnr', 0):.2f}")
+        print(f"  train_loss: {best_result.metrics['train_loss']:.4f}")
 
-    print(f"\nBest checkpoint: {best_result.checkpoint}")
+        print(f"\nBest checkpoint: {best_result.checkpoint}")
 
-    # Save best config to file
-    if args.save_best_config:
-        config_path = Path(args.save_best_config)
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        import json
+        # Save best config to file
+        if args.save_best_config:
+            config_path = Path(args.save_best_config)
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            import json
 
-        with open(config_path, "w") as f:
-            # Filter out non-serializable items
-            save_config = {
-                k: v
-                for k, v in best_result.config.items()
-                if k not in ["h5_paths"] and not callable(v)
-            }
-            json.dump(save_config, f, indent=2)
-        print(f"\nBest config saved to: {config_path}")
+            with open(config_path, "w") as f:
+                # Filter out non-serializable items
+                save_config = {
+                    k: v
+                    for k, v in best_result.config.items()
+                    if k not in ["h5_paths"] and not callable(v)
+                }
+                json.dump(save_config, f, indent=2)
+            print(f"\nBest config saved to: {config_path}")
+
+    finally:
+        # Clean up Ray and temporary directory
+        cleanup_ray()
+        if Path(temp_ray_dir).exists():
+            try:
+                shutil.rmtree(temp_ray_dir)
+            except Exception as e:
+                print(f"Warning: Could not remove temp directory {temp_ray_dir}: {e}")
 
 
 def build_argparser() -> argparse.ArgumentParser:
