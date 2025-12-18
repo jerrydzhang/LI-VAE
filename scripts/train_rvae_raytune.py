@@ -6,11 +6,15 @@ import os
 from pathlib import Path
 from typing import Any
 
+import os
 import torch
 from ray import train, tune
-from ray.train import Checkpoint, ScalingConfig
+from ray.train import Checkpoint
 from ray.tune.schedulers import ASHAScheduler, PopulationBasedTraining
 from ray.tune.search.hyperopt import HyperOptSearch
+
+# Suppress Ray deprecation warnings
+os.environ["RAY_TRAIN_ENABLE_V2_MIGRATION_WARNINGS"] = "0"
 from torch.utils.data import DataLoader, random_split
 
 from livae.data import AdaptiveLatticeDataset, default_transform
@@ -268,13 +272,16 @@ def run_hyperparameter_search(args: argparse.Namespace) -> None:
 
     # Choose scheduler
     if args.scheduler == "asha":
+        # Ensure grace_period doesn't exceed max_t
+        grace_period = min(args.grace_period, max(1, args.epochs // 2))
         scheduler = ASHAScheduler(
             metric="loss",
             mode="min",
             max_t=args.epochs,
-            grace_period=args.grace_period,
+            grace_period=grace_period,
             reduction_factor=args.reduction_factor,
         )
+        print(f"ASHA Scheduler: grace_period={grace_period}, max_t={args.epochs}, reduction_factor={args.reduction_factor}")
     elif args.scheduler == "pbt":
         scheduler = PopulationBasedTraining(
             time_attr="epoch",
@@ -308,11 +315,10 @@ def run_hyperparameter_search(args: argparse.Namespace) -> None:
             num_samples=args.num_samples,
             max_concurrent_trials=args.max_concurrent,
         ),
-        run_config=train.RunConfig(
+        run_config=tune.RunConfig(
             name=args.experiment_name,
             storage_path=args.ray_results_dir,
-            stop={"epoch": args.epochs},
-            checkpoint_config=train.CheckpointConfig(
+            checkpoint_config=tune.CheckpointConfig(
                 num_to_keep=1,
                 checkpoint_score_attribute="loss",
                 checkpoint_score_order="min",
