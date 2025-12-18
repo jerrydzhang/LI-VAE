@@ -568,5 +568,6 @@ def build_argparser() -> argparse.ArgumentParser:
 
 
 if __name__ == "__main__":
+    print("Starting RVAE Ray Tune hyperparameter search...")
     args = build_argparser().parse_args()
     run_hyperparameter_search(args)
