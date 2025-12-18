@@ -139,8 +139,8 @@ def run_training(args: argparse.Namespace) -> None:
     print(f"Model initialized: RVAE with {args.latent_dim}-dim latent space")
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    optimizer = torch.optim.SGD(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay, momentum=0.9
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
     )
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
