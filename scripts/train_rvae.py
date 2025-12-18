@@ -186,9 +186,17 @@ def run_training(args: argparse.Namespace) -> None:
             train_logger,
             device,
             scaler=scaler,
+            canonical_weight=args.canonical_weight,
         )
 
-        evaluate(model, val_loader, criterion, val_logger, device)
+        evaluate(
+            model,
+            val_loader,
+            criterion,
+            val_logger,
+            device,
+            canonical_weight=args.canonical_weight,
+        )
 
         log_scalar_metrics_tensorboard(
             writer, train_logger.get_averages(), global_step=epoch, prefix="train/"
@@ -338,6 +346,13 @@ def build_argparser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Number of epochs for beta warmup (default: 10)",
+    )
+
+    parser.add_argument(
+        "--canonical-weight",
+        type=float,
+        default=0.2,
+        help="Weight for canonical-frame consistency loss (0 to disable)",
     )
 
     parser.add_argument(

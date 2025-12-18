@@ -80,23 +80,25 @@ def default_transform(
     jitter_amount: int = 4,
     rotation: bool = True,
 ) -> torch.Tensor:
-    """Default set of transforms: random flip, rotation and jitter.
-    
-    Note: This transform is applied AFTER the padding->crop sequence in __getitem__,
-    so the input patch should already have sufficient padding to avoid black edges
-    during rotation. For a square patch, padding >= patch_size * (sqrt(2) - 1) / 2
-    is needed for full 360° rotation without clipping (e.g., 27 pixels for 128x128).
-    """
+    """Default set of transforms: random flip, rotation, jitter, and scale"""
+    scale_factor = random.uniform(0.9, 1.1)
+    patch = TF.affine(
+        patch,
+        angle=0.0,
+        translate=[0, 0],
+        scale=scale_factor,
+        shear=[0.0],
+        interpolation=TF.InterpolationMode.BILINEAR,
+    )
+
     if rotation:
         angle = random.uniform(0, 360)
-        # expand=False keeps the canvas size fixed, which is what we want
-        # The padding in __getitem__ should be sufficient to avoid clipping
         patch = TF.rotate(
-            patch, 
-            angle=angle, 
+            patch,
+            angle=angle,
             interpolation=TF.InterpolationMode.BILINEAR,
-            expand=False,  # Keep size constant
-            fill=0  # Fill with black (shouldn't be visible if padding is sufficient)
+            expand=False,
+            fill=0,
         )
 
     if random.random() < flip_prob:
@@ -536,7 +538,10 @@ class AdaptiveLatticeDataset(Dataset):
         if self.transform:
             patch_big = self.transform(patch_big)
 
-        patch_final = TF.center_crop(patch_big, [self.patch_size, self.patch_size])
+        patch_cropped = TF.center_crop(patch_big, [self.patch_size, self.patch_size])
+        patch_final = (patch_cropped - patch_cropped.mean()) / (
+            patch_cropped.std() + 1e-6
+        )
 
         return patch_final
 

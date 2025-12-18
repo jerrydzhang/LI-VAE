@@ -212,8 +212,8 @@ class RotationSTN(nn.Module):
             nn.Linear(32, 1),
         )
 
-        self.localization[-1].weight.data.fill_(0)
-        self.localization[-1].bias.data.fill_(0)
+        nn.init.normal_(self.localization[-1].weight, mean=0.0, std=1e-3)
+        nn.init.normal_(self.localization[-1].bias, mean=0.0, std=1e-3)
 
     def get_rotation_matrix(self, theta):
         """
