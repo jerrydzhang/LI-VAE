@@ -98,15 +98,20 @@ def train_one_epoch(
                 canonical_input = rotate_to_canonical(
                     x, theta, model.encoder.rotation_stn
                 )
+                # Use mean reduction to keep loss scale stable
                 canonical_loss = F.mse_loss(
-                    canonical_recon, canonical_input, reduction="sum"
+                    canonical_recon, canonical_input, reduction="mean"
                 )
                 loss = loss + canonical_weight * canonical_loss
 
         if use_amp:
             scaler.scale(loss).backward()
+            # Unscale and clip gradients for stability
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
         else:
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
 
         total_norm = 0.0
         for p in model.parameters():
@@ -326,9 +331,11 @@ def train_rvae_one_epoch(
 
         if canonical_weight > 0 and canonical_recon is not None:
             canonical_input = rotate_to_canonical(x, theta, model.encoder.rotation_stn)
-            canonical_loss = F.mse_loss(canonical_recon, canonical_input, reduction="sum")
+            # Use mean reduction to avoid excessive scale
+            canonical_loss = F.mse_loss(canonical_recon, canonical_input, reduction="mean")
             loss = loss + canonical_weight * canonical_loss
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
 
         total_norm = 0.0
         for p in model.parameters():
@@ -398,9 +405,9 @@ def evaluate_rvae(
     latent_std_sum = 0.0
     rotation_std_sum = 0.0
     n_batches = 0
-
-    with torch.no_grad():
-        for x in data_loader:
+                canonical_loss = F.mse_loss(
+                    canonical_recon, canonical_input, reduction="mean"
+                )
             x = x.to(device)
 
             # Assumed that the model returns

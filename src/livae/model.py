@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -209,7 +210,7 @@ class RotationSTN(nn.Module):
             nn.Flatten(),
             nn.Linear(32 * (self.h // 4) * (self.w // 4), 32),
             nn.ReLU(True),
-            nn.Linear(32, 1),
+            nn.Linear(32, 2),  # predict [cos, sin] before normalization
         )
 
         nn.init.normal_(self.localization[-1].weight, mean=0.0, std=1e-3)
@@ -238,9 +239,16 @@ class RotationSTN(nn.Module):
             x_rotated: The image rotated to the 'canonical' orientation.
             theta: The angle used (useful for grain mapping later).
         """
-        theta = self.localization(x)
+        vec = self.localization(x)  # [B, 2]
+        # Normalize to unit circle to get stable cos/sin
+        vec = F.normalize(vec, dim=1, eps=1e-6)
+        cos_theta = vec[:, 0:1]
+        sin_theta = vec[:, 1:2]
 
-        rot_matrix = self.get_rotation_matrix(theta)
+        # Build rotation matrix directly from cos/sin
+        row1 = torch.cat([cos_theta, -sin_theta, torch.zeros_like(cos_theta)], dim=1)
+        row2 = torch.cat([sin_theta, cos_theta, torch.zeros_like(cos_theta)], dim=1)
+        rot_matrix = torch.stack([row1, row2], dim=1)
 
         grid = F.affine_grid(rot_matrix, x.size(), align_corners=False)
 
@@ -248,6 +256,8 @@ class RotationSTN(nn.Module):
             x, grid, padding_mode="reflection", align_corners=False
         )
 
+        # Report angle for logging/analysis
+        theta = torch.atan2(sin_theta, cos_theta)
         return x_rotated, theta
 
 
