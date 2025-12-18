@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import getpass
+
 import torch
 import ray
 from ray import train, tune
