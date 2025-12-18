@@ -11,10 +11,10 @@ from livae.model import RVAE
 from livae.utils import load_image_from_h5, clean_state_dict
 
 # --- Configuration ---
-RESULTS_DIR = Path("/ray_results/rvae_tune")
+RESULTS_DIR = Path("/home/jez21005/ray_results/rvae_tune")
 DATA_FILE = Path("data/HAADF1.h5")
-# Set to 'cuda' if you have a GPU and want to use it
-DEVICE = "cpu"
+# Automatically use GPU if available
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def get_best_trial_from_analysis(analysis: tune.ExperimentAnalysis) -> Trial:
@@ -40,14 +40,9 @@ def load_model_from_checkpoint(best_trial: Trial, device: str) -> RVAE:
 
     model = RVAE(latent_dim=latent_dim, patch_size=patch_size)
 
-    checkpoint_path = Path(best_trial.checkpoint.path) / "checkpoint.pkl"
-
-    # Load checkpoint onto the correct device
-    checkpoint_data = torch.load(
-        checkpoint_path,
-        map_location=torch.device(device),
-        weights_only=False,
-    )
+    # Use the official API to get the checkpoint data as a dictionary
+    # This is safer and handles cross-device loading automatically when possible.
+    checkpoint_data = best_trial.checkpoint.to_dict()
 
     # The model state is stored under 'model_state_dict'
     model_state_dict = checkpoint_data["model_state_dict"]
