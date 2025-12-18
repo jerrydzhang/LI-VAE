@@ -168,13 +168,19 @@ def run_training(args: argparse.Namespace) -> None:
     print(f"\nStarting training for {args.epochs} epochs...")
     print(f"Learning rate: {args.lr}, Beta: {args.beta}, Gamma: {args.gamma}")
     if args.beta_annealing:
-        print(f"Beta annealing enabled: {args.beta_annealing_epochs} epochs warmup")
+        print(f"Beta annealing: {args.beta_warmup_epochs} epochs at 0, then {args.beta_annealing_epochs} epochs ramp to {args.beta}")
 
     for epoch in tqdm(range(1, args.epochs + 1), desc="Training Epochs"):
         if args.beta_annealing:
-            if epoch <= args.beta_annealing_epochs:
-                current_beta = args.beta * (epoch / args.beta_annealing_epochs)
+            if epoch <= args.beta_warmup_epochs:
+                # Warmup phase: beta stays at 0
+                current_beta = 0.0
+            elif epoch <= args.beta_warmup_epochs + args.beta_annealing_epochs:
+                # Annealing phase: linear ramp from 0 to target beta
+                annealing_progress = (epoch - args.beta_warmup_epochs) / args.beta_annealing_epochs
+                current_beta = args.beta * annealing_progress
             else:
+                # Full beta reached
                 current_beta = args.beta
             criterion.beta = current_beta
         train_rvae_one_epoch(
@@ -328,13 +334,13 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--beta",
         type=float,
-        default=1.0,
-        help="Beta coefficient for KL divergence (higher = stronger KL penalty, but risk of latent collapse with mean reduction)",
+        default=10.0,
+        help="Beta coefficient for KL divergence - use 10-100 with mean reduction to prevent posterior collapse",
     )
     parser.add_argument(
         "--gamma",
         type=float,
-        default=1.0,
+        default=10.0,
         help="Gamma coefficient for cycle consistency loss",
     )
 
@@ -344,10 +350,16 @@ def build_argparser() -> argparse.ArgumentParser:
         help="Enable beta annealing (linear warmup from 0 to beta)",
     )
     parser.add_argument(
+        "--beta-warmup-epochs",
+        type=int,
+        default=5,
+        help="Number of epochs to keep beta at 0 before starting annealing (default: 5)",
+    )
+    parser.add_argument(
         "--beta-annealing-epochs",
         type=int,
-        default=10,
-        help="Number of epochs for beta warmup from 0 to beta (default: 10); increase to 20-30 for gentler warmup",
+        default=15,
+        help="Number of epochs for beta ramp from 0 to target after warmup (default: 15)",
     )
     parser.add_argument(
         "--grad-max-norm",
