@@ -586,7 +586,7 @@ class AdaptiveLatticeDataset(Dataset):
             patch_final = (patch_cropped - min_val) / (max_val - min_val)
         else:
             patch_final = torch.zeros_like(patch_cropped)
-        
+
         return patch_final
 
     def plot_lattice(
@@ -720,7 +720,9 @@ class PairedAdaptiveLatticeDataset(AdaptiveLatticeDataset):
             rotated_patch = patch_big.clone()
 
         patch_cropped = TF.center_crop(patch, [self.patch_size, self.patch_size])
-        rotated_patch_cropped = TF.center_crop(rotated_patch, [self.patch_size, self.patch_size])
+        rotated_patch_cropped = TF.center_crop(
+            rotated_patch, [self.patch_size, self.patch_size]
+        )
 
         min_val = patch_cropped.min()
         max_val = patch_cropped.max()
@@ -732,7 +734,9 @@ class PairedAdaptiveLatticeDataset(AdaptiveLatticeDataset):
         min_val_rotated = rotated_patch_cropped.min()
         max_val_rotated = rotated_patch_cropped.max()
         if max_val_rotated > min_val_rotated:
-            rotated_patch_final = (rotated_patch_cropped - min_val_rotated) / (max_val_rotated - min_val_rotated)
+            rotated_patch_final = (rotated_patch_cropped - min_val_rotated) / (
+                max_val_rotated - min_val_rotated
+            )
         else:
             rotated_patch_final = torch.zeros_like(rotated_patch_cropped)
 

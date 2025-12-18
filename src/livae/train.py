@@ -209,6 +209,7 @@ def train_rvae_one_epoch(
     ssim_sum = 0.0
     latent_mean_abs_sum = 0.0
     latent_std_sum = 0.0
+    rotation_std_sum = 0.0
 
     for x, x_rotated in tqdm(data_loader, desc="Training", leave=False):
         x = x.to(device, non_blocking=True)
@@ -216,7 +217,7 @@ def train_rvae_one_epoch(
         optimizer.zero_grad(set_to_none=True)
 
         with torch.autocast("cuda", enabled=use_amp):
-            rotated_recon, _, _, mu, logvar = model(x)
+            rotated_recon, _, theta, mu, logvar = model(x)
             _, _, _, mu_rotated, _ = model(x_rotated)
 
             loss, recon_loss, kld_loss, cycle_loss = criterion(
@@ -252,6 +253,9 @@ def train_rvae_one_epoch(
             latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
             psnr_sum += compute_psnr(rotated_recon, x)
             ssim_sum += compute_ssim(rotated_recon, x)
+            if theta is not None:
+                angles = angles_from_theta(theta)
+                rotation_std_sum += circular_std(angles).item()
 
     # --- Metric Averaging and Logging ---
     metrics = {
@@ -263,6 +267,7 @@ def train_rvae_one_epoch(
         "train_ssim": ssim_sum / n_batches,
         "train_latent_mean_abs": latent_mean_abs_sum / n_batches,
         "train_latent_std": latent_std_sum / n_batches,
+        "train_rotation_std": rotation_std_sum / n_batches,
     }
     metric_logger.update(**metrics)
 
@@ -287,13 +292,14 @@ def evaluate_rvae(
     ssim_sum = 0.0
     latent_mean_abs_sum = 0.0
     latent_std_sum = 0.0
+    rotation_std_sum = 0.0
 
     with torch.no_grad():
         for x, x_rotated in data_loader:
             x = x.to(device)
             x_rotated = x_rotated.to(device)
 
-            rotated_recon, _, _, mu, logvar = model(x)
+            rotated_recon, _, theta, mu, logvar = model(x)
             _, _, _, mu_rotated, _ = model(x_rotated)
 
             loss, recon_loss, kld_loss, cycle_loss = criterion(
@@ -311,6 +317,9 @@ def evaluate_rvae(
             latent_std_sum += torch.mean(torch.exp(0.5 * logvar)).item()
             psnr_sum += compute_psnr(rotated_recon, x)
             ssim_sum += compute_ssim(rotated_recon, x)
+            if theta is not None:
+                angles = angles_from_theta(theta)
+                rotation_std_sum += circular_std(angles).item()
 
     # --- Metric Averaging and Logging ---
     metrics = {
@@ -322,6 +331,7 @@ def evaluate_rvae(
         "val_ssim": ssim_sum / n_batches,
         "val_latent_mean_abs": latent_mean_abs_sum / n_batches,
         "val_latent_std": latent_std_sum / n_batches,
+        "val_rotation_std": rotation_std_sum / n_batches,
     }
     metric_logger.update(**metrics)
 
