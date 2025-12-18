@@ -44,11 +44,26 @@ def load_model_from_checkpoint(best_trial: Trial, device: str) -> RVAE:
         raise ValueError("No checkpoint found for the best trial.")
 
     with best_trial.checkpoint.as_directory() as checkpoint_dir:
-        model_state_dict = torch.load(
-            Path(checkpoint_dir) / "model.pth",
-            map_location=device,
-            weights_only=False,
-        )
+        checkpoint_file = Path(checkpoint_dir) / "checkpoint.pkl"
+        
+        if not checkpoint_file.is_file():
+            files_in_checkpoint = list(Path(checkpoint_dir).iterdir())
+            raise FileNotFoundError(
+                f"Checkpoint file '{checkpoint_file.name}' not found in {checkpoint_dir}. "
+                f"Files found: {files_in_checkpoint}"
+            )
+
+        # Check file size
+        if checkpoint_file.stat().st_size == 0:
+            raise ValueError(f"Checkpoint file is empty: {checkpoint_file}")
+
+        # Since we are on a GPU machine now, let's try pure pickle.load first.
+        # This is the exact counterpart to how the file was saved.
+        with open(checkpoint_file, "rb") as f:
+            checkpoint_data = pickle.load(f)
+
+    # The model state is stored under 'model_state_dict'
+    model_state_dict = checkpoint_data["model_state_dict"]
 
     model.load_state_dict(model_state_dict)
     model.to(device)
