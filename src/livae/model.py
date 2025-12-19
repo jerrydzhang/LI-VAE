@@ -213,8 +213,9 @@ class RotationSTN(nn.Module):
             nn.Linear(32, 2),  # predict [cos, sin] before normalization
         )
 
-        nn.init.normal_(self.localization[-1].weight, mean=0.0, std=1e-3)
-        nn.init.normal_(self.localization[-1].bias, mean=0.0, std=1e-3)
+        # Initialize with larger std to encourage learning diverse rotations early
+        nn.init.normal_(self.localization[-1].weight, mean=0.0, std=0.01)
+        nn.init.zeros_(self.localization[-1].bias)
 
     def get_rotation_matrix(self, theta):
         """
