@@ -152,9 +152,15 @@ class RVAELoss(nn.Module):
         kld_loss = torch.mean(kld_per_sample)
 
         # Cycle consistency loss: enforce angle difference matches expected rotation
+        # NOTE: We use stop_gradient on theta to make cycle loss primarily guide STN
+        # without forcing the entire encoder representation to match. This reduces
+        # the conflict between reconstruction (which wants canonical normalization)
+        # and cycle loss (which wants rotation detection).
         if (theta is not None and theta_rotated is not None and 
             expected_angle is not None and self.gamma > 0):
-            cycle_loss = cycle_consistency_loss(theta, theta_rotated, expected_angle)
+            # Stop gradients on theta_original so cycle loss only updates STN through theta_rotated
+            theta_sg = theta.detach()
+            cycle_loss = cycle_consistency_loss(theta_sg, theta_rotated, expected_angle)
         else:
             cycle_loss = torch.tensor(0.0, device=recon_x.device)
 
