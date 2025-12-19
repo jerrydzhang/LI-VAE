@@ -29,6 +29,26 @@ def circular_distance(theta1: torch.Tensor, theta2: torch.Tensor, eps: float = 1
     return torch.mean(diff)
 
 
+def rotation_diversity_loss(theta: torch.Tensor, target_std: float = 1.0) -> torch.Tensor:
+    """Encourage diverse rotation angles by penalizing low standard deviation.
+    
+    Instead of using paired samples, we directly encourage the STN to produce
+    diverse rotation estimates across a batch. This is simpler and more stable
+    than cycle consistency.
+    
+    Args:
+        theta: Rotation angles [B, 1]
+        target_std: Target standard deviation (default 1.0 rad ≈ 57°)
+        
+    Returns:
+        Loss that is 0 when std=target, increases as std deviates
+    """
+    batch_std = torch.std(theta)
+    # Penalize deviation from target std
+    loss = (batch_std - target_std) ** 2
+    return loss
+
+
 def cycle_consistency_loss(theta_original: torch.Tensor, theta_rotated: torch.Tensor, 
                            expected_angle: torch.Tensor) -> torch.Tensor:
     """Compute cycle consistency loss with expected angle difference.
@@ -103,17 +123,17 @@ class VAELoss(nn.Module):
 
 
 class RVAELoss(nn.Module):
-    """rVAE loss with beta (KL) and gamma (cycle) weights.
+    """rVAE loss with beta (KL) and gamma (rotation diversity) weights.
 
-    Cycle loss enforces that the detected rotation angle difference matches
-    the expected rotation angle applied to generate the rotated patch.
-    All losses use mean reduction for proper per-element scaling.
+    Can use either cycle consistency (paired rotations) or diversity loss
+    (batch statistics) to encourage rotation detection.
     """
 
-    def __init__(self, beta: float = 1.0, gamma: float = 0.0) -> None:
+    def __init__(self, beta: float = 1.0, gamma: float = 0.0, use_diversity: bool = False) -> None:
         super().__init__()
         self.beta = beta
         self.gamma = gamma
+        self.use_diversity = use_diversity  # If True, use diversity loss instead of cycle loss
 
     def forward(
         self,
@@ -127,8 +147,6 @@ class RVAELoss(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute RVAE loss.
 
-        Uses mean reduction for proper per-element scaling.
-
         Args:
             recon_x: Reconstructed images [B, C, H, W]
             x: Original images [B, C, H, W]
@@ -139,31 +157,30 @@ class RVAELoss(nn.Module):
             expected_angle: Applied rotation angle in radians [B] or [B, 1]
 
         Returns:
-            total_loss, recon_loss, kld_loss, cycle_loss
+            total_loss, recon_loss, kld_loss, rotation_loss
         """
         batch_size = x.size(0)
         
         # Reconstruction loss: sum over spatial dims, mean over batch
-        # This keeps gradients in trainable range while normalizing by batch
         recon_loss = F.mse_loss(recon_x, x, reduction="sum") / batch_size
 
         # KL divergence: sum over latent dims, mean over batch
         kld_per_sample = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
         kld_loss = torch.mean(kld_per_sample)
 
-        # Cycle consistency loss: enforce angle difference matches expected rotation
-        # NOTE: We use stop_gradient on theta to make cycle loss primarily guide STN
-        # without forcing the entire encoder representation to match. This reduces
-        # the conflict between reconstruction (which wants canonical normalization)
-        # and cycle loss (which wants rotation detection).
-        if (theta is not None and theta_rotated is not None and 
-            expected_angle is not None and self.gamma > 0):
-            # Stop gradients on theta_original so cycle loss only updates STN through theta_rotated
-            theta_sg = theta.detach()
-            cycle_loss = cycle_consistency_loss(theta_sg, theta_rotated, expected_angle)
+        # Rotation loss: either cycle consistency or diversity
+        if self.gamma > 0:
+            if self.use_diversity and theta is not None:
+                # Encourage diverse rotation predictions across batch
+                rotation_loss = rotation_diversity_loss(theta, target_std=1.0)
+            elif theta is not None and theta_rotated is not None and expected_angle is not None:
+                # Enforce angle difference matches expected rotation
+                rotation_loss = cycle_consistency_loss(theta, theta_rotated, expected_angle)
+            else:
+                rotation_loss = torch.tensor(0.0, device=recon_x.device)
         else:
-            cycle_loss = torch.tensor(0.0, device=recon_x.device)
+            rotation_loss = torch.tensor(0.0, device=recon_x.device)
 
-        total_loss = recon_loss + self.beta * kld_loss + self.gamma * cycle_loss
+        total_loss = recon_loss + self.beta * kld_loss + self.gamma * rotation_loss
 
-        return total_loss, recon_loss, kld_loss, cycle_loss
+        return total_loss, recon_loss, kld_loss, rotation_loss

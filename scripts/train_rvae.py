@@ -150,6 +150,7 @@ def run_training(args: argparse.Namespace) -> None:
     criterion = RVAELoss(
         beta=0.0 if args.beta_annealing else args.beta,
         gamma=args.gamma,
+        use_diversity=args.use_diversity_loss,
     )
 
     scaler = (
@@ -356,7 +357,13 @@ def build_argparser() -> argparse.ArgumentParser:
         "--gamma",
         type=float,
         default=10.0,
-        help="Gamma coefficient for cycle consistency loss",
+        help="Gamma coefficient for rotation loss (cycle or diversity)",
+    )
+
+    parser.add_argument(
+        "--use-diversity-loss",
+        action="store_true",
+        help="Use rotation diversity loss instead of cycle consistency (simpler, no paired samples needed)",
     )
 
     parser.add_argument(
