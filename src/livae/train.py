@@ -320,7 +320,8 @@ def train_rvae_one_epoch(
                 x, x_rotated, angle = batch
                 x = x.to(device)
                 x_rotated = x_rotated.to(device)
-                angle = torch.tensor(angle, dtype=torch.float32, device=device)
+                # DataLoader already batches angle as tensor, just move to device
+                angle = angle.to(device) if isinstance(angle, torch.Tensor) else torch.tensor(angle, dtype=torch.float32, device=device)
             elif len(batch) == 2:
                 # Paired dataset without angle (old format)
                 x, x_rotated = batch
@@ -475,7 +476,8 @@ def evaluate_rvae(
                     x, x_rotated, angle = batch
                     x = x.to(device)
                     x_rotated = x_rotated.to(device)
-                    angle = torch.tensor(angle, dtype=torch.float32, device=device)
+                    # DataLoader already batches angle as tensor, just move to device
+                    angle = angle.to(device) if isinstance(angle, torch.Tensor) else torch.tensor(angle, dtype=torch.float32, device=device)
                 elif len(batch) == 2:
                     # Paired dataset without angle (old format)
                     x, x_rotated = batch
