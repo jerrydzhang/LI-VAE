@@ -153,6 +153,24 @@ def run_training(args: argparse.Namespace) -> None:
         use_diversity=args.use_diversity_loss,
     )
 
+    # Optionally load and/or freeze a pretrained STN
+    if args.stn_checkpoint:
+        ckpt_path = Path(args.stn_checkpoint)
+        if ckpt_path.exists():
+            state = torch.load(ckpt_path, map_location=device)
+            if isinstance(state, dict) and "rotation_stn" in state:
+                model.encoder.rotation_stn.load_state_dict(state["rotation_stn"])
+                print(f"Loaded pretrained STN from {ckpt_path}")
+            else:
+                print(f"Warning: {ckpt_path} does not contain 'rotation_stn' key; skipping load")
+        else:
+            print(f"Warning: STN checkpoint not found at {ckpt_path}")
+
+    if args.freeze_stn:
+        for p in model.encoder.rotation_stn.parameters():
+            p.requires_grad = False
+        print("Frozen RotationSTN parameters for rVAE training")
+
     scaler = (
         torch.amp.GradScaler() if device.type == "cuda" and not args.no_amp else None
     )
@@ -382,6 +400,17 @@ def build_argparser() -> argparse.ArgumentParser:
         type=int,
         default=15,
         help="Number of epochs for beta ramp from 0 to target after warmup (default: 15)",
+    )
+    parser.add_argument(
+        "--stn-checkpoint",
+        type=str,
+        default=None,
+        help="Path to a pretrained RotationSTN checkpoint (from pretrain_stn.py)",
+    )
+    parser.add_argument(
+        "--freeze-stn",
+        action="store_true",
+        help="Freeze RotationSTN parameters during rVAE training",
     )
     parser.add_argument(
         "--grad-max-norm",
