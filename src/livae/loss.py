@@ -29,6 +29,45 @@ def circular_distance(theta1: torch.Tensor, theta2: torch.Tensor, eps: float = 1
     return torch.mean(diff)
 
 
+def cycle_consistency_loss(theta_original: torch.Tensor, theta_rotated: torch.Tensor, 
+                           expected_angle: torch.Tensor) -> torch.Tensor:
+    """Compute cycle consistency loss with expected angle difference.
+    
+    When patch is rotated by angle R, the STN should detect:
+    - theta_original = θ on original patch
+    - theta_rotated = θ - R on rotated patch (approximately)
+    
+    So: theta_rotated - theta_original ≈ -expected_angle
+    
+    Args:
+        theta_original: Rotation detected on original [B, 1]
+        theta_rotated: Rotation detected on rotated patch [B, 1]
+        expected_angle: Applied rotation angle in radians [B]
+        
+    Returns:
+        Loss (scalar, mean over batch)
+    """
+    # Ensure shapes are [B, 1]
+    if theta_original.dim() == 1:
+        theta_original = theta_original.unsqueeze(1)
+    if theta_rotated.dim() == 1:
+        theta_rotated = theta_rotated.unsqueeze(1)
+    if expected_angle.dim() == 0:
+        expected_angle = expected_angle.unsqueeze(0)
+    if expected_angle.dim() == 1:
+        expected_angle = expected_angle.unsqueeze(1)
+    
+    # Compute predicted angle difference
+    predicted_diff = theta_rotated - theta_original  # [B, 1]
+    expected_diff = -expected_angle  # negative because rotation decreases detected angle
+    
+    # Account for wraparound: map difference to [-π, π]
+    diff_error = torch.abs(predicted_diff - expected_diff)
+    diff_error = torch.min(diff_error, 2 * torch.pi - diff_error)
+    
+    return torch.mean(diff_error)
+
+
 class VAELoss(nn.Module):
     """VAE loss with configurable beta, using mean reductions for stable scaling."""
 
@@ -60,7 +99,8 @@ class VAELoss(nn.Module):
 class RVAELoss(nn.Module):
     """rVAE loss with beta (KL) and gamma (cycle) weights.
 
-    Cycle loss can be computed from mu_rotated (if provided) or set to zero.
+    Cycle loss enforces that the detected rotation angle difference matches
+    the expected rotation angle applied to generate the rotated patch.
     All losses use mean reduction for proper per-element scaling.
     """
 
@@ -77,6 +117,7 @@ class RVAELoss(nn.Module):
         logvar: torch.Tensor,
         theta: torch.Tensor | None = None,
         theta_rotated: torch.Tensor | None = None,
+        expected_angle: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute RVAE loss.
 
@@ -88,7 +129,8 @@ class RVAELoss(nn.Module):
             mu: Latent mean [B, latent_dim]
             logvar: Latent log variance [B, latent_dim]
             theta: Rotation angle from original image [B, 1]
-            theta_rotated: Rotation angle from rotated version for cycle consistency [B, 1]
+            theta_rotated: Rotation angle from rotated version [B, 1]
+            expected_angle: Applied rotation angle in radians [B] or [B, 1]
 
         Returns:
             total_loss, recon_loss, kld_loss, cycle_loss
@@ -103,10 +145,10 @@ class RVAELoss(nn.Module):
         kld_per_sample = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
         kld_loss = torch.mean(kld_per_sample)
 
-        # Cycle consistency loss: enforce theta_original ≈ theta_rotated
-        # This ensures rotation angles are detected consistently regardless of input orientation
-        if theta is not None and theta_rotated is not None and self.gamma > 0:
-            cycle_loss = circular_distance(theta, theta_rotated)
+        # Cycle consistency loss: enforce angle difference matches expected rotation
+        if (theta is not None and theta_rotated is not None and 
+            expected_angle is not None and self.gamma > 0):
+            cycle_loss = cycle_consistency_loss(theta, theta_rotated, expected_angle)
         else:
             cycle_loss = torch.tensor(0.0, device=recon_x.device)
 

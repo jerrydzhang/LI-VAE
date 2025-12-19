@@ -624,8 +624,14 @@ class AdaptiveLatticeDataset(Dataset):
 
 
 class PairedAdaptiveLatticeDataset(AdaptiveLatticeDataset):
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        """Get patch and label"""
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, float]:
+        """Get patch, rotated patch, and rotation angle.
+        
+        Returns:
+            patch: Original patch [C, H, W]
+            rotated_patch: Patch rotated by angle [C, H, W]
+            angle_rad: Rotation angle in radians
+        """
         img_idx = 0
         while img_idx < len(self.sample_coords) and idx >= len(
             self.sample_coords[img_idx]
@@ -733,4 +739,7 @@ class PairedAdaptiveLatticeDataset(AdaptiveLatticeDataset):
         else:
             rotated_patch_final = torch.zeros_like(rotated_patch_cropped)
 
-        return patch_final, rotated_patch_final
+        # Convert angle from degrees to radians for consistency
+        angle_rad = np.radians(angle)
+        
+        return patch_final, rotated_patch_final, angle_rad

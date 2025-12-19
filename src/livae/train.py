@@ -313,20 +313,29 @@ def train_rvae_one_epoch(
     max_norm = grad_max_norm if grad_max_norm is not None else 20.0
 
     for batch in data_loader:
-        # Handle paired dataset: (x, x_rotated) or single x
+        # Handle paired dataset: (x, x_rotated, angle) or single x
         if isinstance(batch, (list, tuple)):
-            if len(batch) == 2:
-                # Paired dataset for cycle consistency
+            if len(batch) == 3:
+                # Paired dataset with rotation angle for cycle consistency
+                x, x_rotated, angle = batch
+                x = x.to(device)
+                x_rotated = x_rotated.to(device)
+                angle = torch.tensor(angle, dtype=torch.float32, device=device)
+            elif len(batch) == 2:
+                # Paired dataset without angle (old format)
                 x, x_rotated = batch
                 x = x.to(device)
                 x_rotated = x_rotated.to(device)
+                angle = None
             else:
                 # Single sample
                 x = batch[0].to(device)
                 x_rotated = None
+                angle = None
         else:
             x = batch.to(device)
             x_rotated = None
+            angle = None
 
         optimizer.zero_grad(set_to_none=True)
 
@@ -341,7 +350,7 @@ def train_rvae_one_epoch(
                     theta_rotated = None
 
                 loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
-                    rotated_recon, x, mu, logvar, theta, theta_rotated
+                    rotated_recon, x, mu, logvar, theta, theta_rotated, angle
                 )
 
                 # Track canonical loss separately
@@ -369,7 +378,7 @@ def train_rvae_one_epoch(
                 theta_rotated = None
 
             loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
-                rotated_recon, x, mu, logvar, theta, theta_rotated
+                rotated_recon, x, mu, logvar, theta, theta_rotated, angle
             )
 
             # Track canonical loss separately
@@ -459,20 +468,29 @@ def evaluate_rvae(
     n_batches = 0
     with torch.no_grad():
         for batch in data_loader:
-            # Handle paired dataset: (x, x_rotated) or single x
+            # Handle paired dataset: (x, x_rotated, angle) or single x
             if isinstance(batch, (list, tuple)):
-                if len(batch) == 2:
-                    # Paired dataset for cycle consistency
+                if len(batch) == 3:
+                    # Paired dataset with rotation angle for cycle consistency
+                    x, x_rotated, angle = batch
+                    x = x.to(device)
+                    x_rotated = x_rotated.to(device)
+                    angle = torch.tensor(angle, dtype=torch.float32, device=device)
+                elif len(batch) == 2:
+                    # Paired dataset without angle (old format)
                     x, x_rotated = batch
                     x = x.to(device)
                     x_rotated = x_rotated.to(device)
+                    angle = None
                 else:
                     # Single sample
                     x = batch[0].to(device)
                     x_rotated = None
+                    angle = None
             else:
                 x = batch.to(device)
                 x_rotated = None
+                angle = None
             # Assumed that the model returns
             # rotated_recon, recon, rotated_recon_rotation, mu, logvar
             rotated_recon, canonical_recon, theta, mu, logvar = model(x)
@@ -484,7 +502,7 @@ def evaluate_rvae(
                 theta_rotated = None
 
             loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
-                rotated_recon, x, mu, logvar, theta, theta_rotated
+                rotated_recon, x, mu, logvar, theta, theta_rotated, angle
             )
 
             # Track canonical loss separately
