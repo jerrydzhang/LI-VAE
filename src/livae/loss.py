@@ -39,6 +39,9 @@ def cycle_consistency_loss(theta_original: torch.Tensor, theta_rotated: torch.Te
     
     So: theta_rotated - theta_original ≈ -expected_angle
     
+    Uses smooth circular loss: 1 - cos(diff) which is always differentiable
+    and handles wraparound naturally.
+    
     Args:
         theta_original: Rotation detected on original [B, 1]
         theta_rotated: Rotation detected on rotated patch [B, 1]
@@ -57,15 +60,18 @@ def cycle_consistency_loss(theta_original: torch.Tensor, theta_rotated: torch.Te
     if expected_angle.dim() == 1:
         expected_angle = expected_angle.unsqueeze(1)
     
-    # Compute predicted angle difference
+    # Compute predicted vs expected angle difference
     predicted_diff = theta_rotated - theta_original  # [B, 1]
     expected_diff = -expected_angle  # negative because rotation decreases detected angle
     
-    # Account for wraparound: map difference to [-π, π]
-    diff_error = torch.abs(predicted_diff - expected_diff)
-    diff_error = torch.min(diff_error, 2 * torch.pi - diff_error)
+    # Smooth circular loss using cosine: 1 - cos(predicted - expected)
+    # This naturally handles wraparound and is fully differentiable
+    # cos(0) = 1, so loss = 0 when angles match
+    # cos(π) = -1, so loss = 2 when angles differ by π
+    diff = predicted_diff - expected_diff
+    circular_loss = 1.0 - torch.cos(diff)
     
-    return torch.mean(diff_error)
+    return torch.mean(circular_loss)
 
 
 class VAELoss(nn.Module):
