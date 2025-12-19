@@ -139,8 +139,23 @@ def run_training(args: argparse.Namespace) -> None:
     print(f"Model initialized: RVAE with {args.latent_dim}-dim latent space")
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
 
+    # Build optimizer with optional separate STN learning rate
+    param_groups = []
+    stn_params = list(model.encoder.rotation_stn.parameters())
+    other_params = []
+    for n, p in model.named_parameters():
+        if "encoder.rotation_stn" not in n:
+            other_params.append(p)
+    
+    if args.stn_lr is not None and args.stn_lr != args.lr:
+        param_groups.append({"params": stn_params, "lr": args.stn_lr})
+        param_groups.append({"params": other_params, "lr": args.lr})
+        print(f"Using separate STN LR: {args.stn_lr} (other params: {args.lr})")
+    else:
+        param_groups = model.parameters()
+    
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+        param_groups, weight_decay=args.weight_decay
     )
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -170,6 +185,8 @@ def run_training(args: argparse.Namespace) -> None:
         for p in model.encoder.rotation_stn.parameters():
             p.requires_grad = False
         print("Frozen RotationSTN parameters for rVAE training")
+    elif args.stn_lr is not None:
+        print(f"Fine-tuning RotationSTN with learning rate {args.stn_lr}")
 
     scaler = (
         torch.amp.GradScaler() if device.type == "cuda" and not args.no_amp else None
@@ -411,6 +428,12 @@ def build_argparser() -> argparse.ArgumentParser:
         "--freeze-stn",
         action="store_true",
         help="Freeze RotationSTN parameters during rVAE training",
+    )
+    parser.add_argument(
+        "--stn-lr",
+        type=float,
+        default=None,
+        help="Learning rate for RotationSTN fine-tuning (if None, uses --lr; if 0, disables STN updates)",
     )
     parser.add_argument(
         "--grad-max-norm",
