@@ -334,14 +334,14 @@ def train_rvae_one_epoch(
             with torch.autocast("cuda", enabled=True):
                 rotated_recon, canonical_recon, theta, mu, logvar = model(x)
 
-                # Compute mu_rotated for cycle consistency if we have paired data
+                # Compute theta_rotated for rotation angle cycle consistency if we have paired data
                 if x_rotated is not None:
-                    mu_rotated, _, _ = model.encoder(x_rotated)
+                    _, _, theta_rotated = model.encoder(x_rotated)
                 else:
-                    mu_rotated = None
+                    theta_rotated = None
 
                 loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
-                    rotated_recon, x, mu, logvar, mu_rotated
+                    rotated_recon, x, mu, logvar, theta, theta_rotated
                 )
 
                 # Track canonical loss separately
@@ -362,14 +362,14 @@ def train_rvae_one_epoch(
         else:
             rotated_recon, canonical_recon, theta, mu, logvar = model(x)
 
-            # Compute mu_rotated for cycle consistency if we have paired data
+            # Compute theta_rotated for rotation angle cycle consistency if we have paired data
             if x_rotated is not None:
-                mu_rotated, _, _ = model.encoder(x_rotated)
+                _, _, theta_rotated = model.encoder(x_rotated)
             else:
-                mu_rotated = None
+                theta_rotated = None
 
             loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
-                rotated_recon, x, mu, logvar, mu_rotated
+                rotated_recon, x, mu, logvar, theta, theta_rotated
             )
 
             # Track canonical loss separately
@@ -477,14 +477,14 @@ def evaluate_rvae(
             # rotated_recon, recon, rotated_recon_rotation, mu, logvar
             rotated_recon, canonical_recon, theta, mu, logvar = model(x)
 
-            # Compute mu_rotated for cycle consistency if we have paired data
+            # Compute theta_rotated for rotation angle cycle consistency if we have paired data
             if x_rotated is not None:
-                mu_rotated, _, _ = model.encoder(x_rotated)
+                _, _, theta_rotated = model.encoder(x_rotated)
             else:
-                mu_rotated = None
+                theta_rotated = None
 
             loss, batch_recon_loss, batch_kld_loss, batch_cycle_loss = criterion(
-                rotated_recon, x, mu, logvar, mu_rotated
+                rotated_recon, x, mu, logvar, theta, theta_rotated
             )
 
             # Track canonical loss separately

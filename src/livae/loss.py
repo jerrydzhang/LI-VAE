@@ -3,6 +3,32 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def circular_distance(theta1: torch.Tensor, theta2: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Compute circular distance between angles accounting for wraparound.
+    
+    Args:
+        theta1: Angle tensor [B, 1] or [B]
+        theta2: Angle tensor [B, 1] or [B]
+        eps: Small value for numerical stability
+        
+    Returns:
+        Circular distance (mean over batch)
+    """
+    # Ensure both are [B, 1]
+    if theta1.dim() == 1:
+        theta1 = theta1.unsqueeze(1)
+    if theta2.dim() == 1:
+        theta2 = theta2.unsqueeze(1)
+    
+    # Compute angular difference
+    diff = torch.abs(theta1 - theta2)
+    
+    # Account for wraparound: take minimum of diff and 2π - diff
+    diff = torch.min(diff, 2 * torch.pi - diff)
+    
+    return torch.mean(diff)
+
+
 class VAELoss(nn.Module):
     """VAE loss with configurable beta, using mean reductions for stable scaling."""
 
@@ -49,7 +75,8 @@ class RVAELoss(nn.Module):
         x: torch.Tensor,
         mu: torch.Tensor,
         logvar: torch.Tensor,
-        mu_rotated: torch.Tensor | None = None,
+        theta: torch.Tensor | None = None,
+        theta_rotated: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute RVAE loss.
 
@@ -60,7 +87,8 @@ class RVAELoss(nn.Module):
             x: Original images [B, C, H, W]
             mu: Latent mean [B, latent_dim]
             logvar: Latent log variance [B, latent_dim]
-            mu_rotated: Optional latent mean from rotated version for cycle consistency
+            theta: Rotation angle from original image [B, 1]
+            theta_rotated: Rotation angle from rotated version for cycle consistency [B, 1]
 
         Returns:
             total_loss, recon_loss, kld_loss, cycle_loss
@@ -75,9 +103,10 @@ class RVAELoss(nn.Module):
         kld_per_sample = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
         kld_loss = torch.mean(kld_per_sample)
 
-        # Cycle consistency loss (mean over latent dims) - only if mu_rotated provided
-        if mu_rotated is not None and self.gamma > 0:
-            cycle_loss = F.mse_loss(mu, mu_rotated, reduction="mean")
+        # Cycle consistency loss: enforce theta_original ≈ theta_rotated
+        # This ensures rotation angles are detected consistently regardless of input orientation
+        if theta is not None and theta_rotated is not None and self.gamma > 0:
+            cycle_loss = circular_distance(theta, theta_rotated)
         else:
             cycle_loss = torch.tensor(0.0, device=recon_x.device)
 
