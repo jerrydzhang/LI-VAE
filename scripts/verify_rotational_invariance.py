@@ -11,7 +11,7 @@ from livae.model import RVAE
 from livae.utils import load_image_from_h5, clean_state_dict
 
 # --- Configuration ---
-RESULTS_DIR = Path("/home/jez21005/ray_results/rvae_tune")
+RESULTS_DIR = Path("checkpoints/ray_results/rvae_tune")
 DATA_FILE = Path("data/HAADF1.h5")
 # Automatically use GPU if available
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -65,7 +65,7 @@ def load_model_from_checkpoint(best_trial: Trial, device: str) -> RVAE:
     """
     config = best_trial.config
     latent_dim = config.get("latent_dim", 10)
-    patch_size = 128
+    patch_size = config.get("patch_size", 64)
 
     model = RVAE(latent_dim=latent_dim, patch_size=patch_size)
 
@@ -86,10 +86,12 @@ def load_model_from_checkpoint(best_trial: Trial, device: str) -> RVAE:
         if checkpoint_file.stat().st_size == 0:
             raise ValueError(f"Checkpoint file is empty: {checkpoint_file}")
 
-        # Since we are on a GPU machine now, let's try pure pickle.load first.
-        # This is the exact counterpart to how the file was saved.
-        with open(checkpoint_file, "rb") as f:
-            checkpoint_data = pickle.load(f)
+        # Use torch.load with explicit CPU map_location to handle CUDA-saved checkpoints on CPU-only hosts
+        checkpoint_data = torch.load(
+            checkpoint_file,
+            map_location=torch.device("cpu"),
+            weights_only=False,
+        )
 
     # The model state is stored under 'model_state_dict'
     model_state_dict = checkpoint_data["model_state_dict"]

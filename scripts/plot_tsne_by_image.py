@@ -87,7 +87,7 @@ def embed_latents(latent, errors=None, method="auto", seed=42):
 if __name__ == "__main__":
     root = Path(__file__).resolve().parents[1]
     if IS_RVAE:
-        ckpt_path = root / "checkpoints" / "rvae_best.pt"
+        ckpt_path = root / "checkpoints" / "rvae_final_best5_final.pt"
     else:
         ckpt_path = root / "checkpoints" / "vae_best.pt"
     if not ckpt_path.exists():
@@ -150,7 +150,7 @@ if __name__ == "__main__":
     plt.ylabel("dim-2")
     out_dir = root / "runs" / "plots"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "embedding_by_image.png"
+    out_path = out_dir / "embedding_by_image3.png"
     plt.tight_layout()
     plt.savefig(out_path, dpi=150)
     print(f"Saved embedding plot to: {out_path}")

@@ -284,10 +284,7 @@ class PatchDataset(Dataset):
             coords = coords - np.array([y_off, x_off])
         plt.figure(figsize=(6, 6))
         plt.imshow(img, cmap="gray")
-        plt.scatter(
-            coords[:, 1], coords[:, 0], s=30, edgecolor="red", facecolors="none"
-        )
-        plt.title(f"Image {img_idx} with Detected Atoms")
+        plt.scatter(coords[:, 1], coords[:, 0], s=30, c="red", marker="o", alpha=0.8)
         plt.axis("off")
         plt.show()
 
@@ -597,28 +594,21 @@ class AdaptiveLatticeDataset(Dataset):
                 atom_coords[:, 1],
                 atom_coords[:, 0],
                 s=50,
-                c="green",
+                c="red",
                 marker="o",
-                alpha=0.7,
-                edgecolors="white",
-                linewidths=1,
-                label="Atoms",
+                alpha=0.8,
             )
         if len(vacancy_coords) > 0:
             plt.scatter(
                 vacancy_coords[:, 1],
                 vacancy_coords[:, 0],
-                s=60,
+                s=50,
                 c="red",
-                marker="X",
+                marker="o",
                 alpha=0.8,
-                edgecolors="yellow",
-                linewidths=1.5,
-                label="Empty Sites",
             )
 
-        plt.title(f"Adaptive Lattice - Image {img_idx}")
-        plt.legend()
+        # plt.title(f"Adaptive Lattice - Image {img_idx}")
         plt.axis("off")
         plt.show()
 
@@ -626,7 +616,7 @@ class AdaptiveLatticeDataset(Dataset):
 class PairedAdaptiveLatticeDataset(AdaptiveLatticeDataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, float]:
         """Get patch, rotated patch, and rotation angle.
-        
+
         Returns:
             patch: Original patch [C, H, W]
             rotated_patch: Patch rotated by angle [C, H, W]
@@ -741,5 +731,5 @@ class PairedAdaptiveLatticeDataset(AdaptiveLatticeDataset):
 
         # Convert angle from degrees to radians for consistency
         angle_rad = np.radians(angle)
-        
+
         return patch_final, rotated_patch_final, angle_rad
